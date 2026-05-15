@@ -15,6 +15,6 @@
 - [x] `app/pages/2_Rede_Hidrologica.py` — roteamento SMAP + Muskingum em rede
 - [x] `data/` — arquivos de exemplo (diário, mensal, rede)
 - [x] `tests/test_postprocess.py` + `tests/test_models.py`
-- [ ] Executar `pytest` e garantir que todos os testes passam (requer Docker)
-- [ ] Commitar e dar push na branch `claude`
-- [ ] `docker compose up --build -d` e verificar que a aplicação sobe
+- [x] Executar `pytest` e garantir que todos os testes passam
+- [x] Commitar e dar push na branch `claude`
+- [x] `docker compose up --build -d` — container rodando em http://localhost:8501
