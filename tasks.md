@@ -28,6 +28,9 @@
 - [x] adicionar identificação de separador do CSV (, e ;)
 - [x] adicionar alternativa de entrada por xlsx
 - [x] adicionar botão de calibração quando dados observados estão disponíveis
+- [x] adicionar botão de download da série de vazões geradas
+- [x] adicionar visualização por vazões acumuladas (volume)
+- [x] adicionar gráficos de médias mensais
 
 ## Correções
 

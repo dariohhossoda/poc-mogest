@@ -3,7 +3,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from app.components.charts import plot_hydrograph
+from app.components.charts import plot_cumulative_volume, plot_hydrograph, plot_monthly_averages
 from core.io import load_timeseries
 from core.models import (
     calibrate_smap_daily,
@@ -110,8 +110,27 @@ if "sim" in st.session_state:
     index = st.session_state["sim_index"]
     obs = st.session_state["sim_obs"]
 
-    st.subheader("Hidrograma")
-    st.plotly_chart(plot_hydrograph(sim, index=index, obs=obs), use_container_width=True)
+    dt_seconds = 86400.0 if model_type.startswith("D") else 86400.0 * 30.44
+
+    tab_hyd, tab_vol, tab_mon = st.tabs(["📈 Hidrograma", "📊 Volume Acumulado", "📅 Médias Mensais"])
+    with tab_hyd:
+        st.plotly_chart(plot_hydrograph(sim, index=index, obs=obs), use_container_width=True)
+    with tab_vol:
+        st.plotly_chart(plot_cumulative_volume(sim, index=index, obs=obs, dt_seconds=dt_seconds), use_container_width=True)
+    with tab_mon:
+        st.plotly_chart(plot_monthly_averages(sim, index=index, obs=obs), use_container_width=True)
+
+    # --- Download série simulada ---
+    result_df = pd.DataFrame({"sim_m3s": sim}, index=index)
+    result_df.index.name = "date"
+    if obs is not None and len(obs) == len(sim):
+        result_df["obs_m3s"] = obs
+    st.download_button(
+        "📥 Baixar série simulada (CSV)",
+        data=result_df.to_csv().encode(),
+        file_name="vazao_simulada.csv",
+        mime="text/csv",
+    )
 
     st.subheader("Métricas")
     metrics: dict[str, str] = {
