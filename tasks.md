@@ -31,7 +31,12 @@
 - [x] adicionar botão de download da série de vazões geradas
 - [x] adicionar visualização por vazões acumuladas (volume)
 - [x] adicionar gráficos de médias mensais
+- [x] adicionar tabela com estatísticas gerais resumidas anualmente quando a série de dados é suficiente
+- [x] substituir sliders da página `Simulação SMAP` por tabela editável, adicionar `Ad` também nessa tabela
 
 ## Correções
 
 - [x] corrigir erro com import de csv ValueError: Missing column provided to parse_dates: date
+- [x] remover `Tuin` e `Ebin` dos parâmetros selecionáveis na página `Simulação SMAP`
+- [x] a tabela de `Parâmetros Calibrados` deve conter no cabeçalho `Parâmetro` e `Valor` ao invés de ` `, `Valor`
+- [x] desmarcar `Usar dados de exemplo` ao fazer upload de arquivo na página `Simulação SMAP`
