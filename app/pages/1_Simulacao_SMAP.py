@@ -103,6 +103,26 @@ else:
         st.warning("Carregue o arquivo para continuar.")
         st.stop()
     df = load_timeseries(data_file)
+    missing = [c for c in ["prec", "etp"] if c not in df.columns]
+    if missing:
+        st.warning(
+            "Coluna(s) não encontrada(s): "
+            + ", ".join(f"`{c}`" for c in missing)
+            + ". Selecione a coluna correspondente:"
+        )
+        avail = list(df.columns)
+        rename_map: dict[str, str] = {}
+        for expected in missing:
+            chosen = st.selectbox(
+                f"Coluna para **`{expected}`**:",
+                options=avail,
+                key=f"colmap_{expected}",
+            )
+            rename_map[chosen] = expected
+        if set(rename_map.values()) != set(missing):
+            st.error("Mapeamento inválido: selecione colunas distintas para cada campo.")
+            st.stop()
+        df = df.rename(columns=rename_map)
     if not {"prec", "etp"}.issubset(df.columns):
         st.error("O arquivo deve conter as colunas `prec` e `etp`.")
         st.stop()
@@ -113,7 +133,15 @@ obs_file = st.file_uploader(
 obs: list | None = None
 if obs_file:
     obs_df = load_timeseries(obs_file)
-    obs = obs_df.iloc[:, 0].tolist()
+    if obs_df.shape[1] == 1:
+        obs = obs_df.iloc[:, 0].tolist()
+    else:
+        obs_col = st.selectbox(
+            "Coluna de vazão observada:",
+            options=list(obs_df.columns),
+            key="obs_col",
+        )
+        obs = obs_df[obs_col].tolist()
 
 # --- Run ---
 if st.button("▶ Executar simulação", type="primary"):

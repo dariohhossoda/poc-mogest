@@ -33,6 +33,7 @@
 - [x] adicionar gráficos de médias mensais
 - [x] adicionar tabela com estatísticas gerais resumidas anualmente quando a série de dados é suficiente
 - [x] substituir sliders da página `Simulação SMAP` por tabela editável, adicionar `Ad` também nessa tabela
+- [x] quando o arquivo upado não possuir as colunas com mesmo nome, perguntar ao usuário qual é a coluna correspondente esperada
 
 ## Correções
 
