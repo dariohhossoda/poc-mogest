@@ -11,6 +11,24 @@ def run_smap_monthly(params: dict, prec: list, etp: list) -> list[float]:
     return SmapM(**params).run_to_list(prec, etp)
 
 
+def calibrate_smap_daily(
+    params: dict, prec: list, etp: list, obs: list, variables: list[str]
+) -> tuple[dict, float]:
+    """Returns (calibrated_params, KGE)."""
+    result = SmapD(**params).calibrate(prec, etp, obs, variables)
+    calibrated = {**params, **dict(zip(variables, result.x))}
+    return calibrated, float(-result.fun)
+
+
+def calibrate_smap_monthly(
+    params: dict, prec: list, etp: list, obs: list, variables: list[str]
+) -> tuple[dict, float]:
+    """Returns (calibrated_params, KGE)."""
+    result = SmapM(**params).calibrate(prec, etp, obs, variables)
+    calibrated = {**params, **dict(zip(variables, result.x))}
+    return calibrated, float(-result.fun)
+
+
 def run_network_simulation(
     params_df: pd.DataFrame,
     prec_df: pd.DataFrame,

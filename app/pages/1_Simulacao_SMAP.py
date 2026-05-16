@@ -4,8 +4,13 @@ import pandas as pd
 import streamlit as st
 
 from app.components.charts import plot_hydrograph
-from core.io import load_timeseries  # handles flexible date column names
-from core.models import run_smap_daily, run_smap_monthly
+from core.io import load_timeseries
+from core.models import (
+    calibrate_smap_daily,
+    calibrate_smap_monthly,
+    run_smap_daily,
+    run_smap_monthly,
+)
 from core.postprocess import kge, nash_sutcliffe, peak_flow, runoff_volume
 
 st.set_page_config(page_title="Simulação SMAP", page_icon="🌧️", layout="wide")
@@ -29,6 +34,8 @@ if model_type == "Diário (SmapD)":
         "Ad": st.sidebar.number_input("Ad — Área da bacia (km²)", min_value=0.1, value=1.0, step=1.0),
     }
     run_fn = run_smap_daily
+    calibrate_fn = calibrate_smap_daily
+    calib_options = ["Str", "Crec", "Capc", "kkt", "k2t", "Ai", "Tuin", "Ebin"]
     example_path = Path("data/example_daily.csv")
     template_name = "template_smap_diario.csv"
 else:
@@ -43,6 +50,8 @@ else:
         "Ad": st.sidebar.number_input("Ad — Área da bacia (km²)", min_value=0.1, value=1.0, step=1.0),
     }
     run_fn = run_smap_monthly
+    calibrate_fn = calibrate_smap_monthly
+    calib_options = ["Str", "Pes", "Crec", "kkt", "Tuin", "Ebin"]
     example_path = Path("data/example_monthly.csv")
     template_name = "template_smap_mensal.csv"
 
@@ -55,38 +64,46 @@ if use_example:
     st.info(f"Usando `{example_path.name}` — {len(df)} registros.")
 else:
     st.download_button(
-        "📥 Baixar template CSV",
+        "📥 Baixar template",
         data=example_path.read_bytes(),
         file_name=template_name,
         mime="text/csv",
     )
-    st.caption("Formato esperado: colunas `date`, `prec` (mm), `etp` (mm). Coluna `obs` opcional.")
+    st.caption("Colunas: `date`, `prec` (mm), `etp` (mm). Aceita CSV (`,` ou `;`) e XLSX.")
 
-    data_file = st.file_uploader("Série temporal (CSV: date, prec, etp)", type="csv")
+    data_file = st.file_uploader("Série temporal", type=["csv", "xlsx"])
     if data_file:
         df = load_timeseries(data_file)
         if not {"prec", "etp"}.issubset(df.columns):
             st.error("O arquivo deve conter as colunas `prec` e `etp`.")
             st.stop()
     else:
-        st.warning("Carregue o arquivo CSV para continuar.")
+        st.warning("Carregue o arquivo para continuar.")
         st.stop()
 
 obs_file = st.file_uploader(
-    "Vazão observada — opcional (CSV: date, obs)", type="csv", key="obs"
+    "Vazão observada — opcional (CSV/XLSX: date, obs)", type=["csv", "xlsx"], key="obs"
 )
 obs: list | None = None
 if obs_file:
-    obs_df = pd.read_csv(obs_file, parse_dates=["date"], index_col="date")
+    obs_df = load_timeseries(obs_file)
     obs = obs_df.iloc[:, 0].tolist()
 
 # --- Run ---
 if st.button("▶ Executar simulação", type="primary"):
     with st.spinner("Executando modelo SMAP..."):
-        sim = run_fn(params, df["prec"].tolist(), df["etp"].tolist())
-        st.session_state["sim"] = sim
-        st.session_state["sim_index"] = df.index
-        st.session_state["sim_obs"] = obs
+        prec = df["prec"].tolist()
+        etp = df["etp"].tolist()
+        sim = run_fn(params, prec, etp)
+        st.session_state.update({
+            "sim": sim,
+            "sim_index": df.index,
+            "sim_obs": obs,
+            "sim_prec": prec,
+            "sim_etp": etp,
+            "sim_params": params,
+        })
+        st.session_state.pop("calib_result", None)
 
 if "sim" in st.session_state:
     sim = st.session_state["sim"]
@@ -107,3 +124,42 @@ if "sim" in st.session_state:
 
     for col, (label, value) in zip(st.columns(len(metrics)), metrics.items()):
         col.metric(label, value)
+
+    # --- Calibration (only when observed data is available) ---
+    if obs is not None and len(obs) == len(sim):
+        st.divider()
+        st.subheader("🎯 Calibração Automática")
+        sel_vars = st.multiselect(
+            "Parâmetros a calibrar",
+            options=calib_options,
+            default=calib_options[:4],
+        )
+        if st.button("Calibrar parâmetros", disabled=not sel_vars):
+            with st.spinner("Calibrando... pode levar alguns segundos."):
+                calib_params, calib_kge = calibrate_fn(
+                    st.session_state["sim_params"],
+                    st.session_state["sim_prec"],
+                    st.session_state["sim_etp"],
+                    obs,
+                    sel_vars,
+                )
+                calib_sim = run_fn(calib_params, st.session_state["sim_prec"], st.session_state["sim_etp"])
+                st.session_state["calib_result"] = {
+                    "params": calib_params,
+                    "sim": calib_sim,
+                    "kge": calib_kge,
+                }
+
+        if "calib_result" in st.session_state:
+            cr = st.session_state["calib_result"]
+            st.plotly_chart(
+                plot_hydrograph(cr["sim"], index=index, obs=obs, title="Hidrograma Calibrado"),
+                use_container_width=True,
+            )
+            col_kge, *_ = st.columns(4)
+            col_kge.metric("KGE calibrado", f"{cr['kge']:.3f}")
+            st.write("**Parâmetros calibrados:**")
+            st.dataframe(
+                pd.DataFrame.from_dict(cr["params"], orient="index", columns=["Valor"]).round(4),
+                use_container_width=False,
+            )

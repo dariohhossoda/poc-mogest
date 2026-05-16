@@ -55,14 +55,14 @@ else:
 
     col1, col2 = st.columns(2)
     with col1:
-        params_file = st.file_uploader("Parâmetros da rede (CSV)", type="csv")
+        params_file = st.file_uploader("Parâmetros da rede", type=["csv", "xlsx"])
     with col2:
         ts_file = st.file_uploader(
-            "Série temporal unificada (CSV: date, {id}_prec, {id}_etp…)", type="csv"
+            "Série temporal unificada (date, {id}_prec, {id}_etp…)", type=["csv", "xlsx"]
         )
 
     if params_file and ts_file:
-        params_df = pd.read_csv(params_file)
+        params_df = load_params(params_file)
         ts_df = load_timeseries(ts_file)
         try:
             prec_df, etp_df = _parse_timeseries(ts_df)

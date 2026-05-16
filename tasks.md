@@ -25,6 +25,9 @@
 
 - [x] unificar dados de entrada em arquivo CSV único
 - [x] fornecer template para preenchimento dos dados pelo usuário
+- [x] adicionar identificação de separador do CSV (, e ;)
+- [x] adicionar alternativa de entrada por xlsx
+- [x] adicionar botão de calibração quando dados observados estão disponíveis
 
 ## Correções
 
