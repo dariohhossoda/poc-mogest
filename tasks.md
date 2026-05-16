@@ -25,3 +25,7 @@
 
 - [x] unificar dados de entrada em arquivo CSV único
 - [x] fornecer template para preenchimento dos dados pelo usuário
+
+## Correções
+
+- [x] corrigir erro com import de csv ValueError: Missing column provided to parse_dates: date

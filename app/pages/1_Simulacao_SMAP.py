@@ -4,7 +4,7 @@ import pandas as pd
 import streamlit as st
 
 from app.components.charts import plot_hydrograph
-from core.io import load_timeseries
+from core.io import load_timeseries  # handles flexible date column names
 from core.models import run_smap_daily, run_smap_monthly
 from core.postprocess import kge, nash_sutcliffe, peak_flow, runoff_volume
 
@@ -64,7 +64,7 @@ else:
 
     data_file = st.file_uploader("Série temporal (CSV: date, prec, etp)", type="csv")
     if data_file:
-        df = pd.read_csv(data_file, parse_dates=["date"], index_col="date")
+        df = load_timeseries(data_file)
         if not {"prec", "etp"}.issubset(df.columns):
             st.error("O arquivo deve conter as colunas `prec` e `etp`.")
             st.stop()

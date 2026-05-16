@@ -4,7 +4,7 @@ import pandas as pd
 import streamlit as st
 
 from app.components.charts import plot_network_hydrograph
-from core.io import load_params
+from core.io import load_params, load_timeseries
 from core.models import run_network_simulation
 
 st.set_page_config(page_title="Rede Hidrológica", page_icon="🏔️", layout="wide")
@@ -29,7 +29,7 @@ use_example = st.checkbox("Usar dados de exemplo", value=True)
 
 if use_example:
     params_df = load_params(PARAMS_PATH)
-    ts_df = pd.read_csv(TS_PATH, parse_dates=["date"], index_col="date")
+    ts_df = load_timeseries(TS_PATH)
     prec_df, etp_df = _parse_timeseries(ts_df)
     st.info("Usando rede de exemplo com 2 subcatchments.")
 else:
@@ -63,7 +63,7 @@ else:
 
     if params_file and ts_file:
         params_df = pd.read_csv(params_file)
-        ts_df = pd.read_csv(ts_file, parse_dates=["date"], index_col="date")
+        ts_df = load_timeseries(ts_file)
         try:
             prec_df, etp_df = _parse_timeseries(ts_df)
         except KeyError as e:
