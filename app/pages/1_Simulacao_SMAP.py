@@ -30,6 +30,7 @@ if model_type == "Diário (SmapD)":
     }
     run_fn = run_smap_daily
     example_path = Path("data/example_daily.csv")
+    template_name = "template_smap_diario.csv"
 else:
     st.sidebar.subheader("Parâmetros SmapM")
     params = {
@@ -43,6 +44,7 @@ else:
     }
     run_fn = run_smap_monthly
     example_path = Path("data/example_monthly.csv")
+    template_name = "template_smap_mensal.csv"
 
 # --- Data input ---
 st.subheader("Dados de Entrada")
@@ -52,22 +54,27 @@ if use_example:
     df = load_timeseries(example_path)
     st.info(f"Usando `{example_path.name}` — {len(df)} registros.")
 else:
-    col1, col2 = st.columns(2)
-    with col1:
-        prec_file = st.file_uploader("Precipitação (CSV: date, prec)", type="csv")
-    with col2:
-        etp_file = st.file_uploader("Evapotranspiração (CSV: date, etp)", type="csv")
+    st.download_button(
+        "📥 Baixar template CSV",
+        data=example_path.read_bytes(),
+        file_name=template_name,
+        mime="text/csv",
+    )
+    st.caption("Formato esperado: colunas `date`, `prec` (mm), `etp` (mm). Coluna `obs` opcional.")
 
-    if prec_file and etp_file:
-        prec_df = pd.read_csv(prec_file, parse_dates=["date"], index_col="date")
-        etp_df = pd.read_csv(etp_file, parse_dates=["date"], index_col="date")
-        df = prec_df.join(etp_df, how="inner")
-        df.columns = ["prec", "etp"]
+    data_file = st.file_uploader("Série temporal (CSV: date, prec, etp)", type="csv")
+    if data_file:
+        df = pd.read_csv(data_file, parse_dates=["date"], index_col="date")
+        if not {"prec", "etp"}.issubset(df.columns):
+            st.error("O arquivo deve conter as colunas `prec` e `etp`.")
+            st.stop()
     else:
-        st.warning("Carregue os arquivos de precipitação e ETP para continuar.")
+        st.warning("Carregue o arquivo CSV para continuar.")
         st.stop()
 
-obs_file = st.file_uploader("Vazão observada (opcional — CSV: date, obs)", type="csv")
+obs_file = st.file_uploader(
+    "Vazão observada — opcional (CSV: date, obs)", type="csv", key="obs"
+)
 obs: list | None = None
 if obs_file:
     obs_df = pd.read_csv(obs_file, parse_dates=["date"], index_col="date")

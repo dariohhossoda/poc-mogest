@@ -20,3 +20,8 @@
 - [x] `docker compose up --build -d` — container rodando em http://localhost:8501
 - [x] verificar o conteúdo da versão em uso do mogestpy
 - [x] corrigir páginas quebradas
+
+## Melhorar projeto
+
+- [x] unificar dados de entrada em arquivo CSV único
+- [x] fornecer template para preenchimento dos dados pelo usuário
