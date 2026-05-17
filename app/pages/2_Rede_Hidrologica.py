@@ -173,9 +173,9 @@ if "network_result" in st.session_state:
     ])
 
     with tab_all:
-        with st.expander("🎨 Personalizar cores"):
+        colors_all: dict = {}
+        with st.popover("🎨 Cores"):
             picker_cols = st.columns(min(len(result_df.columns), 5))
-            colors_all: dict = {}
             for i, col in enumerate(result_df.columns):
                 default = NETWORK_DEFAULT_COLORS[i % len(NETWORK_DEFAULT_COLORS)]
                 with picker_cols[i % len(picker_cols)]:
@@ -189,9 +189,9 @@ if "network_result" in st.session_state:
 
     with tab_out:
         if outlet_cols:
-            with st.expander("🎨 Personalizar cores"):
+            colors_out: dict = {}
+            with st.popover("🎨 Cores"):
                 picker_cols = st.columns(min(len(outlet_cols), 5))
-                colors_out: dict = {}
                 for i, col in enumerate(outlet_cols):
                     default = NETWORK_DEFAULT_COLORS[i % len(NETWORK_DEFAULT_COLORS)]
                     with picker_cols[i % len(picker_cols)]:

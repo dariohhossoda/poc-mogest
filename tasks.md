@@ -36,7 +36,7 @@
 - [x] quando o arquivo upado não possuir as colunas com mesmo nome, perguntar ao usuário qual é a coluna correspondente esperada
 - [x] permitir que o usuário suba arquivo com parâmetros ao invés de usar a tabela de parâmetros em `Simulação SMAP`
 - [x] criar página para simulação com visualização de mapas- [ ] sincronizar branch com a main
-- [ ] permitir deploy em streamlit, resolvendo caminhos para evitar erro ModuleNotFoundError: No module named 'app'
+- [x] permitir deploy em streamlit, resolvendo caminhos para evitar erro ModuleNotFoundError: No module named 'app'
 
 ### main
 
@@ -49,7 +49,7 @@
 - [x] Adicionar estatísticas das bacias
 - [x] Adicioanr hidrograma somente dos exutórios
 - [x] Permitir o usuário mudar a cor do gráfico
-- [ ] Deixar botão de mudar cor menor
+- [x] Deixar botão de mudar cor menor
 
 ### Visualização Espacial
 
