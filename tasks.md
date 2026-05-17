@@ -43,6 +43,8 @@
 
 ### Rede Hidrológica
 - [x] Alterar upload de série temporal para dois uploads, um arquivo de precipitação e outro de evapotranspiração com as mesmas colunas date, id1, id2...
+- [x] Desativar upload de séries quando o exemplo está habilitado
+- [x] Conferir nomes das colunas e deixar o usuário escolher as colunas correspondentes
 
 ### Visualização Espacial
 
@@ -55,3 +57,13 @@
 - [x] desmarcar `Usar dados de exemplo` ao fazer upload de arquivo na página `Simulação SMAP`
 - [x] lidar com a exceção gerada quando uma série observada de tamanho diferente é subida (cortar série e exibir)
 - [x] corrigir erro gerado quando a coluna de ids é um número ('int' object has no attribute 'lower')
+
+### main
+
+### Simulação SMAP
+
+### Rede Hidrológica
+- [x] Verificar coluna de jusante, caso não exista a coluna permitir o usuário escolher uma coluna para ser `downstream_id`
+- [x] Considerar -999 como vazio em `downstream_id`
+
+### Visualização Espacial

@@ -62,6 +62,13 @@ def run_network_simulation(
                 queue.append(int(row["downstream_id"]))
         return order
 
+    params_df = params_df.copy()
+    if "downstream_id" in params_df.columns:
+        params_df["downstream_id"] = (
+            pd.to_numeric(params_df["downstream_id"], errors="coerce")
+            .replace(-999, float("nan"))
+        )
+
     total_flows: dict[int, list[float]] = {}
 
     for basin_id in _topological_order():
