@@ -15,6 +15,8 @@ PARAMS_PATH = Path("data/example_network_params.csv")
 PREC_PATH = Path("data/example_network_prec.csv")
 ETP_PATH = Path("data/example_network_etp.csv")
 
+_DT_SECONDS = 86400.0  # SmapD is daily
+
 
 def _load_network_series(source) -> pd.DataFrame:
     """Load prec or etp file; convert column names to int basin IDs when possible."""
@@ -36,7 +38,6 @@ def _map_series_columns(
     if current_set == expected_set:
         return df
 
-    # Try numeric conversion (handles "1.0" → 1, "1" → 1)
     try:
         converted = {int(float(c)): c for c in df.columns}
         if set(converted.keys()) == expected_set:
@@ -44,7 +45,6 @@ def _map_series_columns(
     except (ValueError, TypeError):
         pass
 
-    # Manual mapping
     available = [str(c) for c in df.columns]
     unmatched = [eid for eid in expected_ids if eid not in current_set]
     st.warning(
@@ -115,7 +115,6 @@ else:
 
     params_df = load_params(params_file)
 
-    # --- downstream_id column detection ---
     if "downstream_id" not in params_df.columns:
         st.warning("Coluna `downstream_id` não encontrada nos parâmetros.")
         ds_col = st.selectbox(
@@ -125,7 +124,6 @@ else:
         )
         params_df = params_df.rename(columns={ds_col: "downstream_id"})
 
-    # Treat -999 (and non-numeric) as NaN for downstream_id
     params_df["downstream_id"] = (
         pd.to_numeric(params_df["downstream_id"], errors="coerce")
         .replace(-999, float("nan"))
@@ -134,7 +132,6 @@ else:
     prec_df = _load_network_series(prec_file)
     etp_df = _load_network_series(etp_file)
 
-    # --- prec / etp column mapping ---
     expected_ids = params_df["id"].astype(int).tolist()
     prec_df = _map_series_columns(prec_df, expected_ids, "precipitação", "prec")
     etp_df = _map_series_columns(etp_df, expected_ids, "ETP", "etp")
@@ -150,16 +147,71 @@ if st.button("▶ Executar roteamento", type="primary"):
     with st.spinner("Simulando rede hidrológica..."):
         result_df = run_network_simulation(params_df, prec_df, etp_df)
         st.session_state["network_result"] = result_df
+        st.session_state["network_params"] = params_df.copy()
 
 if "network_result" in st.session_state:
     result_df = st.session_state["network_result"]
-    st.subheader("Hidrogramas da Rede")
-    st.plotly_chart(plot_network_hydrograph(result_df), use_container_width=True)
-    st.subheader("Dados da Simulação")
-    st.dataframe(result_df.round(4), use_container_width=True)
-    st.download_button(
-        "📥 Exportar resultados (CSV)",
-        data=result_df.round(4).to_csv().encode(),
-        file_name="resultado_rede.csv",
-        mime="text/csv",
-    )
+    params_stored: pd.DataFrame = st.session_state.get("network_params", pd.DataFrame())
+
+    # Identify outlet basins (downstream_id is NaN)
+    if "downstream_id" in params_stored.columns:
+        outlet_ids = (
+            params_stored.loc[params_stored["downstream_id"].isna(), "id"]
+            .astype(int)
+            .tolist()
+        )
+    else:
+        outlet_ids = list(result_df.columns)
+
+    outlet_cols = [c for c in result_df.columns if c in outlet_ids]
+
+    tab_all, tab_out, tab_stats, tab_raw = st.tabs([
+        "📈 Todos os Subcatchments",
+        "🔵 Exutórios",
+        "📊 Estatísticas",
+        "📋 Dados Brutos",
+    ])
+
+    with tab_all:
+        st.plotly_chart(plot_network_hydrograph(result_df), use_container_width=True)
+
+    with tab_out:
+        if outlet_cols:
+            st.plotly_chart(
+                plot_network_hydrograph(
+                    result_df[outlet_cols], title="Hidrogramas dos Exutórios"
+                ),
+                use_container_width=True,
+            )
+        else:
+            st.info("Nenhum exutório identificado (todas as bacias têm jusante definida).")
+
+    with tab_stats:
+        stats_rows = []
+        for col in result_df.columns:
+            s = result_df[col]
+            stats_rows.append({
+                "Bacia": col,
+                "Tipo": "Exutório" if col in outlet_ids else "Interno",
+                "Média (m³/s)": round(float(s.mean()), 3),
+                "Pico (m³/s)": round(float(s.max()), 3),
+                "Volume (hm³)": round(float(s.sum() * _DT_SECONDS / 1e6), 3),
+            })
+        stats_df = pd.DataFrame(stats_rows).set_index("Bacia")
+        st.dataframe(stats_df, use_container_width=True)
+        st.download_button(
+            "📥 Baixar estatísticas (CSV)",
+            data=stats_df.to_csv().encode(),
+            file_name="estatisticas_rede.csv",
+            mime="text/csv",
+            key="dl_stats",
+        )
+
+    with tab_raw:
+        st.dataframe(result_df.round(4), use_container_width=True)
+        st.download_button(
+            "📥 Exportar resultados (CSV)",
+            data=result_df.round(4).to_csv().encode(),
+            file_name="resultado_rede.csv",
+            mime="text/csv",
+        )

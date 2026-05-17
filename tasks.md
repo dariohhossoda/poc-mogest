@@ -45,6 +45,8 @@
 - [x] Alterar upload de série temporal para dois uploads, um arquivo de precipitação e outro de evapotranspiração com as mesmas colunas date, id1, id2...
 - [x] Desativar upload de séries quando o exemplo está habilitado
 - [x] Conferir nomes das colunas e deixar o usuário escolher as colunas correspondentes
+- [x] Adicionar estatísticas das bacias
+- [x] Adicioanr hidrograma somente dos exutórios
 
 ### Visualização Espacial
 
