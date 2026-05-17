@@ -34,6 +34,8 @@
 - [x] adicionar tabela com estatísticas gerais resumidas anualmente quando a série de dados é suficiente
 - [x] substituir sliders da página `Simulação SMAP` por tabela editável, adicionar `Ad` também nessa tabela
 - [x] quando o arquivo upado não possuir as colunas com mesmo nome, perguntar ao usuário qual é a coluna correspondente esperada
+- [x] permitir que o usuário suba arquivo com parâmetros ao invés de usar a tabela de parâmetros em `Simulação SMAP`
+- [x] criar página para simulação com visualização de mapas
 
 ## Correções
 
@@ -41,3 +43,4 @@
 - [x] remover `Tuin` e `Ebin` dos parâmetros selecionáveis na página `Simulação SMAP`
 - [x] a tabela de `Parâmetros Calibrados` deve conter no cabeçalho `Parâmetro` e `Valor` ao invés de ` `, `Valor`
 - [x] desmarcar `Usar dados de exemplo` ao fazer upload de arquivo na página `Simulação SMAP`
+- [x] lidar com a exceção gerada quando uma série observada de tamanho diferente é subida (cortar série e exibir)

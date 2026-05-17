@@ -65,6 +65,29 @@ params_df = pd.DataFrame(
 )
 params_df.index.name = "Parâmetro"
 
+params_file = st.file_uploader(
+    "Importar parâmetros (CSV/XLSX: coluna `Parâmetro` e `Valor`)",
+    type=["csv", "xlsx"],
+    key="params_file",
+)
+if params_file is not None:
+    try:
+        imported = load_timeseries(params_file)
+        imported.index = imported.index.astype(str)
+        if "Valor" in imported.columns:
+            val_col = "Valor"
+        elif imported.shape[1] >= 1:
+            val_col = imported.columns[0]
+        else:
+            st.error("Arquivo de parâmetros deve ter pelo menos uma coluna de valores.")
+            st.stop()
+        for param in params_df.index:
+            if param in imported.index:
+                params_df.loc[param, "Valor"] = float(imported.loc[param, val_col])
+        st.success(f"Parâmetros importados de `{params_file.name}`.")
+    except Exception as e:
+        st.error(f"Erro ao importar parâmetros: {e}")
+
 edited_df = st.data_editor(
     params_df,
     column_config={
@@ -130,18 +153,18 @@ else:
 obs_file = st.file_uploader(
     "Vazão observada — opcional (CSV/XLSX: date, obs)", type=["csv", "xlsx"], key="obs"
 )
-obs: list | None = None
+obs_raw: pd.Series | None = None
 if obs_file:
     obs_df = load_timeseries(obs_file)
     if obs_df.shape[1] == 1:
-        obs = obs_df.iloc[:, 0].tolist()
+        obs_raw = obs_df.iloc[:, 0]
     else:
         obs_col = st.selectbox(
             "Coluna de vazão observada:",
             options=list(obs_df.columns),
             key="obs_col",
         )
-        obs = obs_df[obs_col].tolist()
+        obs_raw = obs_df[obs_col]
 
 # --- Run ---
 if st.button("▶ Executar simulação", type="primary"):
@@ -149,10 +172,20 @@ if st.button("▶ Executar simulação", type="primary"):
         prec = df["prec"].tolist()
         etp = df["etp"].tolist()
         sim = run_fn(params, prec, etp)
+        obs_aligned: list | None = None
+        if obs_raw is not None:
+            obs_reindexed = obs_raw.reindex(df.index)
+            obs_aligned = obs_reindexed.tolist()
+            n_overlap = int(obs_reindexed.notna().sum())
+            if len(obs_raw) != len(sim) or n_overlap < len(sim):
+                st.info(
+                    f"Série observada ({len(obs_raw)} registros) alinhada ao período simulado "
+                    f"({len(sim)} registros) — {n_overlap} registro(s) em sobreposição."
+                )
         st.session_state.update({
             "sim": sim,
             "sim_index": df.index,
-            "sim_obs": obs,
+            "sim_obs": obs_aligned,
             "sim_prec": prec,
             "sim_etp": etp,
             "sim_params": params,
@@ -163,6 +196,8 @@ if "sim" in st.session_state:
     sim = st.session_state["sim"]
     index = st.session_state["sim_index"]
     obs = st.session_state["sim_obs"]
+    obs_has_valid = obs is not None and any(not pd.isna(v) for v in obs)
+    obs_no_nan = obs is not None and all(not pd.isna(v) for v in obs)
 
     dt_seconds = 86400.0 if model_type.startswith("D") else 86400.0 * 30.44
 
@@ -192,7 +227,7 @@ if "sim" in st.session_state:
     # --- Download série simulada ---
     result_df = pd.DataFrame({"sim_m3s": sim}, index=index)
     result_df.index.name = "date"
-    if obs is not None and len(obs) == len(sim):
+    if obs is not None:
         result_df["obs_m3s"] = obs
     st.download_button(
         "📥 Baixar série simulada (CSV)",
@@ -206,47 +241,53 @@ if "sim" in st.session_state:
         "Pico de Vazão (m³/s)": f"{peak_flow(sim):.3f}",
         "Volume Escoado (hm³)": f"{runoff_volume(sim):.3f}",
     }
-    if obs is not None and len(obs) == len(sim):
-        metrics["NSE"] = f"{nash_sutcliffe(obs, sim):.3f}"
-        metrics["KGE"] = f"{kge(obs, sim):.3f}"
+    if obs_has_valid:
+        paired = [(s, o) for s, o in zip(sim, obs) if not pd.isna(o)]
+        obs_m = [o for _, o in paired]
+        sim_m = [s for s, _ in paired]
+        metrics["NSE"] = f"{nash_sutcliffe(obs_m, sim_m):.3f}"
+        metrics["KGE"] = f"{kge(obs_m, sim_m):.3f}"
 
     for col, (label, value) in zip(st.columns(len(metrics)), metrics.items()):
         col.metric(label, value)
 
-    # --- Calibration (only when observed data is available) ---
-    if obs is not None and len(obs) == len(sim):
+    # --- Calibration (only when observed data covers full sim period) ---
+    if obs_has_valid:
         st.divider()
         st.subheader("🎯 Calibração Automática")
-        sel_vars = st.multiselect(
-            "Parâmetros a calibrar",
-            options=calib_options,
-            default=calib_options[:4],
-        )
-        if st.button("Calibrar parâmetros", disabled=not sel_vars):
-            with st.spinner("Calibrando... pode levar alguns segundos."):
-                calib_params, calib_kge = calibrate_fn(
-                    st.session_state["sim_params"],
-                    st.session_state["sim_prec"],
-                    st.session_state["sim_etp"],
-                    obs,
-                    sel_vars,
-                )
-                calib_sim = run_fn(calib_params, st.session_state["sim_prec"], st.session_state["sim_etp"])
-                st.session_state["calib_result"] = {
-                    "params": calib_params,
-                    "sim": calib_sim,
-                    "kge": calib_kge,
-                }
-
-        if "calib_result" in st.session_state:
-            cr = st.session_state["calib_result"]
-            st.plotly_chart(
-                plot_hydrograph(cr["sim"], index=index, obs=obs, title="Hidrograma Calibrado"),
-                use_container_width=True,
+        if not obs_no_nan:
+            st.info("Calibração disponível apenas quando a série observada cobre todo o período simulado.")
+        else:
+            sel_vars = st.multiselect(
+                "Parâmetros a calibrar",
+                options=calib_options,
+                default=calib_options[:4],
             )
-            col_kge, *_ = st.columns(4)
-            col_kge.metric("KGE calibrado", f"{cr['kge']:.3f}")
-            st.write("**Parâmetros calibrados:**")
-            calib_df = pd.DataFrame.from_dict(cr["params"], orient="index", columns=["Valor"]).round(4)
-            calib_df.index.name = "Parâmetro"
-            st.dataframe(calib_df, use_container_width=False)
+            if st.button("Calibrar parâmetros", disabled=not sel_vars):
+                with st.spinner("Calibrando... pode levar alguns segundos."):
+                    calib_params, calib_kge = calibrate_fn(
+                        st.session_state["sim_params"],
+                        st.session_state["sim_prec"],
+                        st.session_state["sim_etp"],
+                        obs,
+                        sel_vars,
+                    )
+                    calib_sim = run_fn(calib_params, st.session_state["sim_prec"], st.session_state["sim_etp"])
+                    st.session_state["calib_result"] = {
+                        "params": calib_params,
+                        "sim": calib_sim,
+                        "kge": calib_kge,
+                    }
+
+            if "calib_result" in st.session_state:
+                cr = st.session_state["calib_result"]
+                st.plotly_chart(
+                    plot_hydrograph(cr["sim"], index=index, obs=obs, title="Hidrograma Calibrado"),
+                    use_container_width=True,
+                )
+                col_kge, *_ = st.columns(4)
+                col_kge.metric("KGE calibrado", f"{cr['kge']:.3f}")
+                st.write("**Parâmetros calibrados:**")
+                calib_df = pd.DataFrame.from_dict(cr["params"], orient="index", columns=["Valor"]).round(4)
+                calib_df.index.name = "Parâmetro"
+                st.dataframe(calib_df, use_container_width=False)
