@@ -65,5 +65,6 @@
 ### Rede Hidrológica
 - [x] Verificar coluna de jusante, caso não exista a coluna permitir o usuário escolher uma coluna para ser `downstream_id`
 - [x] Considerar -999 como vazio em `downstream_id`
+- [x] Permitir que mais de uma bacia possa ter o mesmo downstream
 
 ### Visualização Espacial

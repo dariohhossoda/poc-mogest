@@ -47,19 +47,31 @@ def run_network_simulation(
         return params_df.loc[params_df["downstream_id"] == basin_id, "id"].tolist()
 
     def _topological_order():
-        all_ids = set(params_df["id"].tolist())
-        has_downstream = set(params_df["downstream_id"].dropna().astype(int).tolist())
-        headwaters = [i for i in all_ids if i not in has_downstream]
-        order, seen, queue = [], set(), list(headwaters)
+        # Kahn's algorithm — correct for any DAG, including multiple tributaries
+        # converging to the same downstream node.
+        id_list = params_df["id"].tolist()
+        ds_map: dict = {}
+        for _, row in params_df.iterrows():
+            bid = row["id"]
+            ds = row["downstream_id"]
+            ds_map[bid] = int(ds) if pd.notna(ds) else None
+
+        in_degree = {bid: 0 for bid in id_list}
+        for bid in id_list:
+            ds = ds_map[bid]
+            if ds is not None and ds in in_degree:
+                in_degree[ds] += 1
+
+        queue = [bid for bid in id_list if in_degree[bid] == 0]
+        order: list = []
         while queue:
             nid = queue.pop(0)
-            if nid in seen:
-                continue
-            seen.add(nid)
             order.append(nid)
-            row = params_df[params_df["id"] == nid].iloc[0]
-            if pd.notna(row["downstream_id"]):
-                queue.append(int(row["downstream_id"]))
+            ds = ds_map[nid]
+            if ds is not None and ds in in_degree:
+                in_degree[ds] -= 1
+                if in_degree[ds] == 0:
+                    queue.append(ds)
         return order
 
     params_df = params_df.copy()
