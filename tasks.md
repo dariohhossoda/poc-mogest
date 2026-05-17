@@ -54,3 +54,4 @@
 - [x] a tabela de `Parâmetros Calibrados` deve conter no cabeçalho `Parâmetro` e `Valor` ao invés de ` `, `Valor`
 - [x] desmarcar `Usar dados de exemplo` ao fazer upload de arquivo na página `Simulação SMAP`
 - [x] lidar com a exceção gerada quando uma série observada de tamanho diferente é subida (cortar série e exibir)
+- [x] corrigir erro gerado quando a coluna de ids é um número ('int' object has no attribute 'lower')

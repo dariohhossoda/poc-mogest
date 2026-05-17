@@ -8,8 +8,11 @@ def _read_table(source, **kwargs) -> pd.DataFrame:
     """Read CSV (auto-detect separator) or Excel file."""
     name = getattr(source, "name", str(source))
     if str(name).lower().endswith((".xlsx", ".xls")):
-        return pd.read_excel(source, **kwargs)
-    return pd.read_csv(source, sep=None, engine="python", **kwargs)
+        df = pd.read_excel(source, **kwargs)
+    else:
+        df = pd.read_csv(source, sep=None, engine="python", **kwargs)
+    df.columns = df.columns.astype(str)
+    return df
 
 
 def load_timeseries(path, date_col: str = "date") -> pd.DataFrame:
