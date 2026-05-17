@@ -1,3 +1,12 @@
+import sys
+from pathlib import Path
+
+# Ensure repo root is on sys.path so `app` and `core` are importable on
+# Streamlit Cloud (where the package may not be installed via pip install .)
+_root = str(Path(__file__).resolve().parent.parent)
+if _root not in sys.path:
+    sys.path.insert(0, _root)
+
 import streamlit as st
 
 st.set_page_config(
