@@ -5,7 +5,8 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "poc-mogestpy"
 version = "0.1.0"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<4.0"
+
 dependencies = [
     "mogestpy>=2.0.0",
     "streamlit>=1.35",
@@ -35,5 +36,5 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I"]
 
-[tool.poetry.dependencies]
-python = "^3.11"
+[tool.poetry]
+package-mode = false
