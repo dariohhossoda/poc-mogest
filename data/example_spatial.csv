@@ -1,0 +1,3 @@
+id,name,lat,lon,downstream_id
+1,Bacia Principal,-23.50,-46.60,
+2,Afluente,-23.70,-46.80,1

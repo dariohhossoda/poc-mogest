@@ -1,0 +1,113 @@
+import pandas as pd
+from mogestpy.quantity.hydrological.smap import SmapD, SmapM
+from mogestpy.quantity.hydrological.muskingum import Muskingum
+
+
+def run_smap_daily(params: dict, prec: list, etp: list) -> list[float]:
+    return SmapD(**params).run_to_list(prec, etp)
+
+
+def run_smap_monthly(params: dict, prec: list, etp: list) -> list[float]:
+    return SmapM(**params).run_to_list(prec, etp)
+
+
+def calibrate_smap_daily(
+    params: dict, prec: list, etp: list, obs: list, variables: list[str]
+) -> tuple[dict, float]:
+    """Returns (calibrated_params, KGE)."""
+    result = SmapD(**params).calibrate(prec, etp, obs, variables)
+    calibrated = {**params, **dict(zip(variables, result.x))}
+    return calibrated, float(-result.fun)
+
+
+def calibrate_smap_monthly(
+    params: dict, prec: list, etp: list, obs: list, variables: list[str]
+) -> tuple[dict, float]:
+    """Returns (calibrated_params, KGE)."""
+    result = SmapM(**params).calibrate(prec, etp, obs, variables)
+    calibrated = {**params, **dict(zip(variables, result.x))}
+    return calibrated, float(-result.fun)
+
+
+def run_network_simulation(
+    params_df: pd.DataFrame,
+    prec_df: pd.DataFrame,
+    etp_df: pd.DataFrame,
+    verbose: bool = False,
+) -> pd.DataFrame:
+    """
+    SMAP + linear Muskingum routing over a network of subcatchments.
+
+    params_df columns: id, area, str, crec, capc, kkt, k2t, ai, tuin, ebin, k, x, downstream_id
+    prec_df / etp_df: indexed by time, columns = subcatchment id (int)
+    Returns DataFrame indexed by time with total discharge (m³/s) per subcatchment.
+    """
+
+    def _upstream_ids(basin_id):
+        return params_df.loc[params_df["downstream_id"] == basin_id, "id"].tolist()
+
+    def _topological_order():
+        # Kahn's algorithm — correct for any DAG, including multiple tributaries
+        # converging to the same downstream node.
+        id_list = params_df["id"].tolist()
+        ds_map: dict = {}
+        for _, row in params_df.iterrows():
+            bid = row["id"]
+            ds = row["downstream_id"]
+            ds_map[bid] = int(ds) if pd.notna(ds) else None
+
+        in_degree = {bid: 0 for bid in id_list}
+        for bid in id_list:
+            ds = ds_map[bid]
+            if ds is not None and ds in in_degree:
+                in_degree[ds] += 1
+
+        queue = [bid for bid in id_list if in_degree[bid] == 0]
+        order: list = []
+        while queue:
+            nid = queue.pop(0)
+            order.append(nid)
+            ds = ds_map[nid]
+            if ds is not None and ds in in_degree:
+                in_degree[ds] -= 1
+                if in_degree[ds] == 0:
+                    queue.append(ds)
+        return order
+
+    params_df = params_df.copy()
+    if "downstream_id" in params_df.columns:
+        params_df["downstream_id"] = (
+            pd.to_numeric(params_df["downstream_id"], errors="coerce")
+            .replace(-999, float("nan"))
+        )
+
+    total_flows: dict[int, list[float]] = {}
+
+    for basin_id in _topological_order():
+        row = params_df[params_df["id"] == basin_id].iloc[0]
+        smap_params = {
+            "Str": float(row["str"]),
+            "Crec": float(row["crec"]),
+            "Capc": float(row["capc"]),
+            "kkt": float(row["kkt"]),
+            "k2t": float(row["k2t"]),
+            "Ai": float(row["ai"]),
+            "Tuin": float(row["tuin"]),
+            "Ebin": float(row["ebin"]),
+            "Ad": float(row["area"]),
+        }
+        local: list[float] = SmapD(**smap_params).run_to_list(
+            prec_df[basin_id].tolist(), etp_df[basin_id].tolist()
+        )
+        total = list(local)
+        for up_id in _upstream_ids(basin_id):
+            up_row = params_df[params_df["id"] == up_id].iloc[0]
+            routed = Muskingum.downstream_routing(
+                total_flows[up_id], k=float(up_row["k"]), x=float(up_row["x"]), dt=1.0
+            )
+            total = [a + b for a, b in zip(total, routed)]
+        total_flows[basin_id] = total
+        if verbose:
+            print(f"Subcatchment {basin_id} concluído.")
+
+    return pd.DataFrame(total_flows, index=prec_df.index)
