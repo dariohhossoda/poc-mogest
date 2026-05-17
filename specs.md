@@ -4,6 +4,7 @@
 
 - Nunca commitar informações sensíveis, segredos ou variáveis de ambiente (tokens, senhas, chaves de API, arquivos `.env`).
 - Sempre seguir estritamente o escopo da task definida. Nunca refatorar código que não esteja explicitamente especificado na task.
+- Sempre perguntar quando for necessário instalar um pacote npm ou pypi
 
 ## Fluxo de Trabalho
 

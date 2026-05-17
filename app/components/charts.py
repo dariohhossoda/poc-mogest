@@ -91,10 +91,24 @@ def plot_monthly_averages(
     return fig
 
 
-def plot_network_hydrograph(df: pd.DataFrame, title: str = "Hidrogramas da Rede") -> go.Figure:
+NETWORK_DEFAULT_COLORS = [
+    "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+    "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
+]
+
+
+def plot_network_hydrograph(
+    df: pd.DataFrame,
+    title: str = "Hidrogramas da Rede",
+    colors: dict | None = None,
+) -> go.Figure:
     fig = go.Figure()
-    for col in df.columns:
-        fig.add_trace(go.Scatter(x=df.index, y=df[col], name=f"Subcatchment {col}"))
+    for i, col in enumerate(df.columns):
+        color = (colors or {}).get(col) or NETWORK_DEFAULT_COLORS[i % len(NETWORK_DEFAULT_COLORS)]
+        fig.add_trace(go.Scatter(
+            x=df.index, y=df[col], name=f"Subcatchment {col}",
+            line=dict(color=color, width=2),
+        ))
     fig.update_layout(
         title=title,
         xaxis_title="Tempo",
