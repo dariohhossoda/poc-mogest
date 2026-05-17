@@ -37,6 +37,16 @@
 - [x] permitir que o usuário suba arquivo com parâmetros ao invés de usar a tabela de parâmetros em `Simulação SMAP`
 - [x] criar página para simulação com visualização de mapas
 
+### main
+
+### Simulação SMAP
+
+### Rede Hidrológica
+- [x] Alterar upload de série temporal para dois uploads, um arquivo de precipitação e outro de evapotranspiração com as mesmas colunas date, id1, id2...
+
+### Visualização Espacial
+
+
 ## Correções
 
 - [x] corrigir erro com import de csv ValueError: Missing column provided to parse_dates: date

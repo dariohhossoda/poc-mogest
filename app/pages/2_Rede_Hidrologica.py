@@ -12,65 +12,80 @@ st.title("🏔️ Roteamento em Rede Hidrológica")
 st.markdown("Simula a propagação de vazões em uma rede de subcatchments usando **SMAP + Muskingum**.")
 
 PARAMS_PATH = Path("data/example_network_params.csv")
-TS_PATH = Path("data/example_network_timeseries.csv")
+PREC_PATH = Path("data/example_network_prec.csv")
+ETP_PATH = Path("data/example_network_etp.csv")
 
 
-def _parse_timeseries(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Splits unified timeseries (cols: {id}_prec, {id}_etp) into prec_df and etp_df."""
-    basin_ids = sorted({int(c.split("_")[0]) for c in df.columns})
-    prec_df = df[[f"{i}_prec" for i in basin_ids]].copy()
-    prec_df.columns = pd.Index(basin_ids)
-    etp_df = df[[f"{i}_etp" for i in basin_ids]].copy()
-    etp_df.columns = pd.Index(basin_ids)
-    return prec_df, etp_df
+def _load_network_series(source) -> pd.DataFrame:
+    """Load a prec or etp file (date index, columns = int basin IDs)."""
+    df = load_timeseries(source)
+    try:
+        df.columns = pd.Index([int(c) for c in df.columns])
+    except (ValueError, TypeError):
+        pass
+    return df
 
 
-use_example = st.checkbox("Usar dados de exemplo", value=True)
+prec_file = st.file_uploader("Precipitação (CSV/XLSX: date, id1, id2…)", type=["csv", "xlsx"], key="prec_upload")
+etp_file = st.file_uploader("ETP (CSV/XLSX: date, id1, id2…)", type=["csv", "xlsx"], key="etp_upload")
+
+if prec_file is not None or etp_file is not None:
+    st.session_state["use_network_example"] = False
+elif "use_network_example" not in st.session_state:
+    st.session_state["use_network_example"] = True
+
+use_example = st.checkbox("Usar dados de exemplo", key="use_network_example")
 
 if use_example:
     params_df = load_params(PARAMS_PATH)
-    ts_df = load_timeseries(TS_PATH)
-    prec_df, etp_df = _parse_timeseries(ts_df)
+    prec_df = _load_network_series(PREC_PATH)
+    etp_df = _load_network_series(ETP_PATH)
     st.info("Usando rede de exemplo com 2 subcatchments.")
 else:
-    col_dl1, col_dl2 = st.columns(2)
+    col_dl1, col_dl2, col_dl3 = st.columns(3)
     with col_dl1:
         st.download_button(
-            "📥 Template — parâmetros da rede",
+            "📥 Template — parâmetros",
             data=PARAMS_PATH.read_bytes(),
             file_name="template_rede_params.csv",
             mime="text/csv",
         )
-        st.caption(
-            "Colunas: `id, area, str, crec, capc, kkt, k2t, ai, tuin, ebin, k, x, downstream_id`"
-        )
+        st.caption("Colunas: `id, area, str, crec, capc, kkt, k2t, ai, tuin, ebin, k, x, downstream_id`")
     with col_dl2:
         st.download_button(
-            "📥 Template — série temporal",
-            data=TS_PATH.read_bytes(),
-            file_name="template_rede_timeseries.csv",
+            "📥 Template — precipitação",
+            data=PREC_PATH.read_bytes(),
+            file_name="template_rede_prec.csv",
             mime="text/csv",
         )
-        st.caption("Colunas: `date, {id}_prec, {id}_etp` — uma coluna por subcatchment.")
-
-    col1, col2 = st.columns(2)
-    with col1:
-        params_file = st.file_uploader("Parâmetros da rede", type=["csv", "xlsx"])
-    with col2:
-        ts_file = st.file_uploader(
-            "Série temporal unificada (date, {id}_prec, {id}_etp…)", type=["csv", "xlsx"]
+        st.caption("Colunas: `date, id1, id2, …` — uma coluna de chuva por subcatchment.")
+    with col_dl3:
+        st.download_button(
+            "📥 Template — ETP",
+            data=ETP_PATH.read_bytes(),
+            file_name="template_rede_etp.csv",
+            mime="text/csv",
         )
+        st.caption("Colunas: `date, id1, id2, …` — uma coluna de ETP por subcatchment.")
 
-    if params_file and ts_file:
-        params_df = load_params(params_file)
-        ts_df = load_timeseries(ts_file)
-        try:
-            prec_df, etp_df = _parse_timeseries(ts_df)
-        except KeyError as e:
-            st.error(f"Coluna não encontrada na série temporal: {e}")
-            st.stop()
-    else:
-        st.warning("Carregue os dois arquivos para continuar.")
+    params_col, _ = st.columns([1, 2])
+    with params_col:
+        params_file = st.file_uploader("Parâmetros da rede", type=["csv", "xlsx"])
+
+    if not (prec_file and etp_file and params_file):
+        st.warning("Carregue os três arquivos (parâmetros, precipitação e ETP) para continuar.")
+        st.stop()
+
+    params_df = load_params(params_file)
+    try:
+        prec_df = _load_network_series(prec_file)
+        etp_df = _load_network_series(etp_file)
+    except Exception as e:
+        st.error(f"Erro ao carregar séries temporais: {e}")
+        st.stop()
+
+    if set(prec_df.columns) != set(etp_df.columns):
+        st.error("Os arquivos de precipitação e ETP devem ter os mesmos IDs de subcatchment.")
         st.stop()
 
 st.subheader("Parâmetros dos Subcatchments")
