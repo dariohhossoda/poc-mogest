@@ -18,22 +18,23 @@ st.title("🌧️ Simulação SMAP")
 
 # --- Sidebar: model type ---
 st.sidebar.header("Configuração do Modelo")
-model_type = st.sidebar.radio("Escala temporal", ["Diário (SmapD)", "Mensal (SmapM)"])
+model_type = st.sidebar.radio("Escala temporal", ["Diário", "Mensal"])
 
 # --- Parameters: editable table ---
 st.subheader("Parâmetros do Modelo")
 
-if model_type == "Diário (SmapD)":
+if model_type == "Diário":
     param_data = {
-        "Str":  (100.0,  "Cap. máx. solo (mm)"),
-        "Crec": (0.0,    "Recarga aquífero"),
-        "Capc": (40.0,   "Cap. de campo (mm)"),
-        "kkt":  (30.0,   "Recessão superficial (dias)"),
-        "k2t":  (0.2,    "Recessão subterrânea"),
-        "Ai":   (2.5,    "Abstração inicial (mm)"),
-        "Tuin": (0.0,    "Umidade inicial (fração)"),
-        "Ebin": (0.0,    "Escoamento base inicial (mm)"),
-        "Ad":   (1.0,    "Área da bacia (km²)"),
+        #            default  descrição                        min    max
+        "Str":  (100.0,  "Cap. máx. solo (mm)",       100,   2000),
+        "Crec": (0.0,    "Recarga aquífero",            0,     20),
+        "Capc": (40.0,   "Cap. de campo (mm)",          30,    50),
+        "kkt":  (30.0,   "Recessão superficial (dias)", 30,    180),
+        "k2t":  (0.2,    "Recessão subterrânea",        0.2,   10),
+        "Ai":   (2.5,    "Abstração inicial (mm)",      2,     5),
+        "Tuin": (0.0,    "Umidade inicial (fração)",    None,  None),
+        "Ebin": (0.0,    "Escoamento base inicial (mm)", None, None),
+        "Ad":   (1.0,    "Área da bacia (km²)",         None,  None),
     }
     run_fn = run_smap_daily
     calibrate_fn = calibrate_smap_daily
@@ -42,13 +43,13 @@ if model_type == "Diário (SmapD)":
     template_name = "template_smap_diario.csv"
 else:
     param_data = {
-        "Str":  (1000.0, "Cap. máx. solo (mm)"),
-        "Pes":  (1.0,    "Coef. de perda"),
-        "Crec": (0.5,    "Recarga aquífero"),
-        "kkt":  (1.5,    "Recessão superficial (meses)"),
-        "Tuin": (0.5,    "Umidade inicial (fração)"),
-        "Ebin": (0.1,    "Escoamento base inicial (mm)"),
-        "Ad":   (1.0,    "Área da bacia (km²)"),
+        "Str":  (1000.0, "Cap. máx. solo (mm)",          400,  5000),
+        "Pes":  (1.0,    "Coef. de perda",                1,    10),
+        "Crec": (0.5,    "Recarga aquífero",              0,    1),
+        "kkt":  (1.5,    "Recessão superficial (meses)",  1,    6),
+        "Tuin": (0.5,    "Umidade inicial (fração)",      None, None),
+        "Ebin": (0.1,    "Escoamento base inicial (mm)",  None, None),
+        "Ad":   (1.0,    "Área da bacia (km²)",           None, None),
     }
     run_fn = run_smap_monthly
     calibrate_fn = calibrate_smap_monthly
@@ -59,8 +60,10 @@ else:
 params_key = "params_daily" if model_type.startswith("D") else "params_monthly"
 params_df = pd.DataFrame(
     {
-        "Valor": {k: v[0] for k, v in param_data.items()},
+        "Valor":    {k: v[0] for k, v in param_data.items()},
         "Descrição": {k: v[1] for k, v in param_data.items()},
+        "Min":      {k: v[2] for k, v in param_data.items()},
+        "Max":      {k: v[3] for k, v in param_data.items()},
     }
 )
 params_df.index.name = "Parâmetro"
@@ -93,6 +96,8 @@ edited_df = st.data_editor(
     column_config={
         "Valor": st.column_config.NumberColumn("Valor"),
         "Descrição": st.column_config.TextColumn("Descrição", disabled=True),
+        "Min": st.column_config.NumberColumn("Min", disabled=True),
+        "Max": st.column_config.NumberColumn("Max", disabled=True),
     },
     use_container_width=False,
     key=params_key,

@@ -39,8 +39,12 @@
 - [x] permitir deploy em streamlit, resolvendo caminhos para evitar erro ModuleNotFoundError: No module named 'app'
 
 ### main
+- [x] substituir nome por `Início`
+- [x] adicionar link da documentação do readthedocs do mogestpy
 
 ### Simulação SMAP
+- [x] remover SmapD e SmapM do nome da escala de escolha nas opções
+- [x] adicionar range dos parâmetros na tabela
 
 ### Rede Hidrológica
 - [x] Alterar upload de série temporal para dois uploads, um arquivo de precipitação e outro de evapotranspiração com as mesmas colunas date, id1, id2...
