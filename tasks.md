@@ -54,9 +54,10 @@
 - [x] Adicioanr hidrograma somente dos exutórios
 - [x] Permitir o usuário mudar a cor do gráfico
 - [x] Deixar botão de mudar cor menor
+- [x] Permitir o usuário mudar o nome da bacia
 
 ### Visualização Espacial
-
+- [ ] permitir upload de arquivos `.geojson`
 
 ## Correções
 
