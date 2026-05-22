@@ -143,6 +143,21 @@ else:
 st.subheader("Parâmetros dos Subcatchments")
 st.dataframe(params_df, use_container_width=True)
 
+basin_ids = params_df["id"].astype(int).tolist()
+if set(st.session_state.get("basin_names", {}).keys()) != set(basin_ids):
+    st.session_state["basin_names"] = {bid: str(bid) for bid in basin_ids}
+
+with st.expander("✏️ Renomear Bacias"):
+    _name_cols = st.columns(min(len(basin_ids), 4))
+    for _i, _bid in enumerate(basin_ids):
+        with _name_cols[_i % len(_name_cols)]:
+            _new_name = st.text_input(
+                f"ID {_bid}",
+                value=st.session_state["basin_names"].get(_bid, str(_bid)),
+                key=f"basin_name_{_bid}",
+            )
+            st.session_state["basin_names"][_bid] = _new_name
+
 if st.button("▶ Executar roteamento", type="primary"):
     with st.spinner("Simulando rede hidrológica..."):
         result_df = run_network_simulation(params_df, prec_df, etp_df)
@@ -152,6 +167,9 @@ if st.button("▶ Executar roteamento", type="primary"):
 if "network_result" in st.session_state:
     result_df = st.session_state["network_result"]
     params_stored: pd.DataFrame = st.session_state.get("network_params", pd.DataFrame())
+
+    name_map: dict = st.session_state.get("basin_names", {})
+    display_df = result_df.rename(columns=name_map)
 
     # Identify outlet basins (downstream_id is NaN)
     if "downstream_id" in params_stored.columns:
@@ -163,7 +181,8 @@ if "network_result" in st.session_state:
     else:
         outlet_ids = list(result_df.columns)
 
-    outlet_cols = [c for c in result_df.columns if c in outlet_ids]
+    outlet_names = [name_map.get(oid, str(oid)) for oid in outlet_ids]
+    outlet_cols = [c for c in display_df.columns if c in outlet_names]
 
     tab_all, tab_out, tab_stats, tab_raw = st.tabs([
         "📈 Todos os Subcatchments",
@@ -175,15 +194,15 @@ if "network_result" in st.session_state:
     with tab_all:
         colors_all: dict = {}
         with st.popover("🎨 Cores"):
-            picker_cols = st.columns(min(len(result_df.columns), 5))
-            for i, col in enumerate(result_df.columns):
+            picker_cols = st.columns(min(len(display_df.columns), 5))
+            for i, col in enumerate(display_df.columns):
                 default = NETWORK_DEFAULT_COLORS[i % len(NETWORK_DEFAULT_COLORS)]
                 with picker_cols[i % len(picker_cols)]:
                     colors_all[col] = st.color_picker(
                         f"Bacia {col}", value=default, key=f"color_all_{col}"
                     )
         st.plotly_chart(
-            plot_network_hydrograph(result_df, colors=colors_all),
+            plot_network_hydrograph(display_df, colors=colors_all),
             use_container_width=True,
         )
 
@@ -200,7 +219,7 @@ if "network_result" in st.session_state:
                         )
             st.plotly_chart(
                 plot_network_hydrograph(
-                    result_df[outlet_cols],
+                    display_df[outlet_cols],
                     title="Hidrogramas dos Exutórios",
                     colors=colors_out,
                 ),
@@ -211,11 +230,11 @@ if "network_result" in st.session_state:
 
     with tab_stats:
         stats_rows = []
-        for col in result_df.columns:
-            s = result_df[col]
+        for col in display_df.columns:
+            s = display_df[col]
             stats_rows.append({
                 "Bacia": col,
-                "Tipo": "Exutório" if col in outlet_ids else "Interno",
+                "Tipo": "Exutório" if col in outlet_names else "Interno",
                 "Média (m³/s)": round(float(s.mean()), 3),
                 "Pico (m³/s)": round(float(s.max()), 3),
                 "Volume (hm³)": round(float(s.sum() * _DT_SECONDS / 1e6), 3),
@@ -231,10 +250,10 @@ if "network_result" in st.session_state:
         )
 
     with tab_raw:
-        st.dataframe(result_df.round(4), use_container_width=True)
+        st.dataframe(display_df.round(4), use_container_width=True)
         st.download_button(
             "📥 Exportar resultados (CSV)",
-            data=result_df.round(4).to_csv().encode(),
+            data=display_df.round(4).to_csv().encode(),
             file_name="resultado_rede.csv",
             mime="text/csv",
         )
