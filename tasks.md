@@ -55,9 +55,10 @@
 - [x] Permitir o usuário mudar a cor do gráfico
 - [x] Deixar botão de mudar cor menor
 - [x] Permitir o usuário mudar o nome da bacia
+- [x] Deixar o botão de nome ao lado do botão de cores no mesmo estilo
 
 ### Visualização Espacial
-- [ ] permitir upload de arquivos `.geojson`
+- [x] permitir upload de arquivos `.geojson`
 
 ## Correções
 

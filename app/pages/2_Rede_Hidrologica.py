@@ -147,17 +147,6 @@ basin_ids = params_df["id"].astype(int).tolist()
 if set(st.session_state.get("basin_names", {}).keys()) != set(basin_ids):
     st.session_state["basin_names"] = {bid: str(bid) for bid in basin_ids}
 
-with st.expander("✏️ Renomear Bacias"):
-    _name_cols = st.columns(min(len(basin_ids), 4))
-    for _i, _bid in enumerate(basin_ids):
-        with _name_cols[_i % len(_name_cols)]:
-            _new_name = st.text_input(
-                f"ID {_bid}",
-                value=st.session_state["basin_names"].get(_bid, str(_bid)),
-                key=f"basin_name_{_bid}",
-            )
-            st.session_state["basin_names"][_bid] = _new_name
-
 if st.button("▶ Executar roteamento", type="primary"):
     with st.spinner("Simulando rede hidrológica..."):
         result_df = run_network_simulation(params_df, prec_df, etp_df)
@@ -192,15 +181,28 @@ if "network_result" in st.session_state:
     ])
 
     with tab_all:
+        _btn_col1, _btn_col2, _ = st.columns([1, 1, 8])
+        with _btn_col1:
+            with st.popover("✏️ Nomes"):
+                _name_cols = st.columns(min(len(basin_ids), 4))
+                for _i, _bid in enumerate(basin_ids):
+                    with _name_cols[_i % len(_name_cols)]:
+                        _new_name = st.text_input(
+                            f"ID {_bid}",
+                            value=st.session_state["basin_names"].get(_bid, str(_bid)),
+                            key=f"basin_name_{_bid}",
+                        )
+                        st.session_state["basin_names"][_bid] = _new_name
         colors_all: dict = {}
-        with st.popover("🎨 Cores"):
-            picker_cols = st.columns(min(len(display_df.columns), 5))
-            for i, col in enumerate(display_df.columns):
-                default = NETWORK_DEFAULT_COLORS[i % len(NETWORK_DEFAULT_COLORS)]
-                with picker_cols[i % len(picker_cols)]:
-                    colors_all[col] = st.color_picker(
-                        f"Bacia {col}", value=default, key=f"color_all_{col}"
-                    )
+        with _btn_col2:
+            with st.popover("🎨 Cores"):
+                picker_cols = st.columns(min(len(display_df.columns), 5))
+                for i, col in enumerate(display_df.columns):
+                    default = NETWORK_DEFAULT_COLORS[i % len(NETWORK_DEFAULT_COLORS)]
+                    with picker_cols[i % len(picker_cols)]:
+                        colors_all[col] = st.color_picker(
+                            f"Bacia {col}", value=default, key=f"color_all_{col}"
+                        )
         st.plotly_chart(
             plot_network_hydrograph(display_df, colors=colors_all),
             use_container_width=True,

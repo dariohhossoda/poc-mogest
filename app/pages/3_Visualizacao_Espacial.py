@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -5,6 +6,31 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from core.io import load_params
+
+
+def _load_geojson(file) -> pd.DataFrame:
+    data = json.loads(file.read())
+    features = data.get("features", []) if data.get("type") == "FeatureCollection" else [data]
+    rows = []
+    for feat in features:
+        props = dict(feat.get("properties") or {})
+        geom = feat.get("geometry") or {}
+        coords = geom.get("coordinates", [])
+        geom_type = geom.get("type", "")
+        if geom_type == "Point":
+            lon, lat = float(coords[0]), float(coords[1])
+        elif geom_type == "Polygon":
+            ring = coords[0]
+            lon = sum(c[0] for c in ring) / len(ring)
+            lat = sum(c[1] for c in ring) / len(ring)
+        elif geom_type == "MultiPolygon":
+            ring = coords[0][0]
+            lon = sum(c[0] for c in ring) / len(ring)
+            lat = sum(c[1] for c in ring) / len(ring)
+        else:
+            continue
+        rows.append({**props, "lat": lat, "lon": lon})
+    return pd.DataFrame(rows)
 
 st.set_page_config(page_title="Visualização Espacial", page_icon="🗺️", layout="wide")
 st.title("🗺️ Visualização Espacial")
@@ -14,11 +40,14 @@ st.markdown(
 )
 
 EXAMPLE_SPATIAL = Path("data/example_spatial.csv")
+EXAMPLE_SPATIAL_GEOJSON = Path("data/example_spatial.geojson")
 
 # --- Spatial data ---
 st.subheader("Localização das Bacias")
 
-spatial_file = st.file_uploader("Coordenadas das bacias (CSV/XLSX)", type=["csv", "xlsx"])
+spatial_file = st.file_uploader(
+    "Coordenadas das bacias (CSV/XLSX/GeoJSON)", type=["csv", "xlsx", "geojson"]
+)
 
 if spatial_file is not None:
     st.session_state["use_spatial_example"] = False
@@ -31,17 +60,30 @@ if use_example:
     spatial_df = load_params(EXAMPLE_SPATIAL)
     st.info("Usando coordenadas de exemplo.")
 else:
-    st.download_button(
-        "📥 Template — coordenadas",
-        data=EXAMPLE_SPATIAL.read_bytes(),
-        file_name="template_espacial.csv",
-        mime="text/csv",
-    )
-    st.caption("Colunas obrigatórias: `id`, `lat`, `lon`. Opcionais: `name`, `downstream_id`.")
+    dl1, dl2 = st.columns(2)
+    with dl1:
+        st.download_button(
+            "📥 Template — CSV",
+            data=EXAMPLE_SPATIAL.read_bytes(),
+            file_name="template_espacial.csv",
+            mime="text/csv",
+        )
+        st.caption("Colunas obrigatórias: `id`, `lat`, `lon`. Opcionais: `name`, `downstream_id`.")
+    with dl2:
+        st.download_button(
+            "📥 Template — GeoJSON",
+            data=EXAMPLE_SPATIAL_GEOJSON.read_bytes(),
+            file_name="template_espacial.geojson",
+            mime="application/geo+json",
+        )
+        st.caption("Features com `Point` ou `Polygon`. Propriedades: `id`, `name`, `downstream_id`.")
     if spatial_file is None:
         st.warning("Carregue o arquivo de coordenadas para continuar.")
         st.stop()
-    spatial_df = load_params(spatial_file)
+    if spatial_file.name.endswith(".geojson"):
+        spatial_df = _load_geojson(spatial_file)
+    else:
+        spatial_df = load_params(spatial_file)
 
 for col in ["id", "lat", "lon"]:
     if col not in spatial_df.columns:

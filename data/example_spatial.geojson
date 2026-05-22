@@ -1,0 +1,15 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {"type": "Point", "coordinates": [-46.60, -23.50]},
+      "properties": {"id": 1, "name": "Bacia Principal", "downstream_id": null}
+    },
+    {
+      "type": "Feature",
+      "geometry": {"type": "Point", "coordinates": [-46.80, -23.70]},
+      "properties": {"id": 2, "name": "Afluente", "downstream_id": 1}
+    }
+  ]
+}
