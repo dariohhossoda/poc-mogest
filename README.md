@@ -10,8 +10,7 @@ Interface web em [Streamlit](https://streamlit.io) para os modelos hidrológicos
 | Página | O que faz |
 |---|---|
 | Simulação SMAP | SMAP diário (`SmapD`) ou mensal (`SmapM`) em uma bacia: parâmetros editáveis ou importados, métricas (NSE, KGE), volume acumulado, médias mensais, estatísticas anuais e calibração automática (evolução diferencial padrão ou rápida) quando há série observada |
-| Rede Hidrológica | SMAP em cada sub-bacia com propagação por Muskingum linear ou Muskingum-Cunge (`mogestpy.quantity.hydrological.routing.run_network`); hidrogramas por sub-bacia e nos exutórios, vazão natural × total, estatísticas e exportação |
-| Visualização Espacial | Mapa das sub-bacias a partir de CSV com coordenadas ou GeoJSON |
+| Rede Hidrológica | SMAP em cada sub-bacia com propagação por Muskingum linear ou Muskingum-Cunge (`mogestpy.quantity.hydrological.routing.run_network`); hidrogramas por sub-bacia e nos exutórios, vazão natural × total, mapa das sub-bacias (pico, média, volume, fração de montante ou vazão num instante; clique abre o hidrograma), estatísticas e exportação |
 
 ## Requisitos
 
@@ -53,7 +52,7 @@ exemplos estão em `data/`.
 | Rede Hidrológica | parâmetros | `id`, `area` (km²), `str`, `crec`, `capc`, `kkt`, `k2t`, `ai`, `tuin` (% de 0 a 100), `ebin`, `k`, `x`, `downstream_id` (vazio ou `-999` no exutório) |
 | Rede Hidrológica | parâmetros, só para Muskingum-Cunge | `length` (m), `q_ref` (m³/s), `manning`, `width` (m), `slope` (m/m) do trecho que atravessa a sub-bacia que recebe a vazão de montante; `length = 0` passa a vazão sem propagar |
 | Rede Hidrológica | precipitação e ETP | `date` e uma coluna por sub-bacia, com o `id` como nome |
-| Visualização Espacial | pontos | `id`, `name`, `lat`, `lon`, `downstream_id` (ou GeoJSON) |
+| Rede Hidrológica | polígonos (opcional) | GeoJSON, shapefile em `.zip` ou GeoPackage, em qualquer sistema de coordenadas (reprojetado para WGS84), com atributo `id` e, opcionalmente, `name` (no shapefile, `downstream_id` truncado para `downstream` é reconhecido). Se os atributos trouxerem todas as colunas de parâmetros, a tabela de parâmetros é dispensada; `area` em km² é calculada pela geometria quando falta |
 
 Na rede, o Muskingum linear usa `k` (em passos de tempo, dias) e `x` da sub-bacia que
 recebe a vazão de montante, como no `run_network` do MOGESTpy.

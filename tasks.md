@@ -73,6 +73,14 @@
 - [x] `Visualização Espacial`: `Scattermapbox` → `Scattermap` (removido no plotly 7)
 - [x] volume `data/` com `:z` no `docker-compose.yml` (SELinux)
 
+## Mapa da rede
+
+- [x] leitura de polígonos (GeoJSON, shapefile .zip, GeoPackage) com reprojeção para WGS84 e área pela geometria (`core/geo.py`)
+- [x] polígonos com todos os atributos dispensam a tabela de parâmetros
+- [x] aba Mapa na Rede Hidrológica: métrica (pico, média, volume, fração de montante, instante), fundo monocromático, ligações montante → jusante, clique abre o hidrograma
+- [x] remover a página `Visualização Espacial`
+- [ ] merge `claude` → `master` e conferir o mapa no Streamlit Cloud
+
 ## Correções
 
 - [x] corrigir erro com import de csv ValueError: Missing column provided to parse_dates: date
