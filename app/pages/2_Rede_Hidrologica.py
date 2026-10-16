@@ -5,17 +5,25 @@ import streamlit as st
 
 from app.components.charts import NETWORK_DEFAULT_COLORS, plot_network_hydrograph
 from core.io import load_params, load_timeseries
-from core.models import run_network_simulation
+from core.models import CUNGE_COLUMNS, run_network_simulation
 
 st.set_page_config(page_title="Rede Hidrológica", page_icon="🏔️", layout="wide")
 st.title("🏔️ Roteamento em Rede Hidrológica")
-st.markdown("Simula a propagação de vazões em uma rede de subcatchments usando **SMAP + Muskingum**.")
+st.markdown(
+    "Simula a propagação de vazões em uma rede de subcatchments usando **SMAP** "
+    "e **Muskingum** (linear ou Muskingum-Cunge)."
+)
 
 PARAMS_PATH = Path("data/example_network_params.csv")
 PREC_PATH = Path("data/example_network_prec.csv")
 ETP_PATH = Path("data/example_network_etp.csv")
 
 _DT_SECONDS = 86400.0  # SmapD is daily
+
+_ROUTING_METHODS = {
+    "Muskingum linear (k, x)": "muskingum",
+    "Muskingum-Cunge (características do trecho)": "muskingum_cunge",
+}
 
 
 def _load_network_series(source) -> pd.DataFrame:
@@ -83,7 +91,11 @@ else:
             file_name="template_rede_params.csv",
             mime="text/csv",
         )
-        st.caption("Colunas: `id, area, str, crec, capc, kkt, k2t, ai, tuin, ebin, k, x, downstream_id`")
+        st.caption(
+            "Colunas: `id, area, str, crec, capc, kkt, k2t, ai, tuin, ebin, k, x, "
+            "downstream_id`; `tuin` em % (0–100). Para Muskingum-Cunge: "
+            "`length` (m), `q_ref` (m³/s), `manning`, `width` (m), `slope` (m/m)."
+        )
     with col_dl2:
         st.download_button(
             "📥 Template — precipitação",
@@ -143,15 +155,49 @@ else:
 st.subheader("Parâmetros dos Subcatchments")
 st.dataframe(params_df, use_container_width=True)
 
+_tuin = pd.to_numeric(params_df.get("tuin"), errors="coerce")
+if _tuin is not None and (_tuin > 0).any() and (_tuin <= 1).all():
+    st.warning(
+        "`tuin` é lido em porcentagem (0–100). Valores entre 0 e 1 parecem "
+        "fração: multiplique por 100 se for o caso."
+    )
+
+method_label = st.radio(
+    "Método de propagação",
+    list(_ROUTING_METHODS),
+    horizontal=True,
+    help=(
+        "Linear: usa `k` e `x` da sub-bacia que recebe a vazão de montante. "
+        "Cunge: calcula k e x a partir do trecho (MGB, Collischonn et al., 2020)."
+    ),
+)
+method = _ROUTING_METHODS[method_label]
+if method == "muskingum_cunge":
+    _missing = [c for c in CUNGE_COLUMNS if c not in params_df.columns]
+    if _missing:
+        st.error(
+            f"Muskingum-Cunge exige as colunas {', '.join(_missing)} na tabela de "
+            "parâmetros (trecho que atravessa a sub-bacia de jusante)."
+        )
+        st.stop()
+
 basin_ids = params_df["id"].astype(int).tolist()
 if set(st.session_state.get("basin_names", {}).keys()) != set(basin_ids):
     st.session_state["basin_names"] = {bid: str(bid) for bid in basin_ids}
 
 if st.button("▶ Executar roteamento", type="primary"):
     with st.spinner("Simulando rede hidrológica..."):
-        result_df = run_network_simulation(params_df, prec_df, etp_df)
+        try:
+            result_df, natural_df = run_network_simulation(
+                params_df, prec_df, etp_df, method=method
+            )
+        except ValueError as e:
+            st.error(f"Erro na simulação da rede: {e}")
+            st.stop()
         st.session_state["network_result"] = result_df
+        st.session_state["network_natural"] = natural_df
         st.session_state["network_params"] = params_df.copy()
+        st.session_state["network_method"] = method_label
 
 if "network_result" in st.session_state:
     result_df = st.session_state["network_result"]
@@ -173,9 +219,13 @@ if "network_result" in st.session_state:
     outlet_names = [name_map.get(oid, str(oid)) for oid in outlet_ids]
     outlet_cols = [c for c in display_df.columns if c in outlet_names]
 
-    tab_all, tab_out, tab_stats, tab_raw = st.tabs([
+    natural_display = st.session_state["network_natural"].rename(columns=name_map)
+    st.caption(f"Método: {st.session_state.get('network_method', '')}")
+
+    tab_all, tab_out, tab_nat, tab_stats, tab_raw = st.tabs([
         "📈 Todos os Subcatchments",
         "🔵 Exutórios",
+        "🌱 Natural × Total",
         "📊 Estatísticas",
         "📋 Dados Brutos",
     ])
@@ -230,6 +280,24 @@ if "network_result" in st.session_state:
         else:
             st.info("Nenhum exutório identificado (todas as bacias têm jusante definida).")
 
+    with tab_nat:
+        st.markdown(
+            "**Natural**: vazão gerada pelo SMAP na própria sub-bacia. "
+            "**Total**: natural + vazão de montante propagada."
+        )
+        nat_col = st.selectbox("Sub-bacia", list(display_df.columns), key="nat_basin")
+        fig_nat = plot_network_hydrograph(
+            pd.DataFrame({
+                "Natural": natural_display[nat_col],
+                "Total": display_df[nat_col],
+            }),
+            title=f"Vazão natural e total — {nat_col}",
+        )
+        fig_nat.for_each_trace(
+            lambda t: t.update(name=t.name.removeprefix("Subcatchment "))
+        )
+        st.plotly_chart(fig_nat, use_container_width=True)
+
     with tab_stats:
         stats_rows = []
         for col in display_df.columns:
@@ -238,6 +306,7 @@ if "network_result" in st.session_state:
                 "Bacia": col,
                 "Tipo": "Exutório" if col in outlet_names else "Interno",
                 "Média (m³/s)": round(float(s.mean()), 3),
+                "Média natural (m³/s)": round(float(natural_display[col].mean()), 3),
                 "Pico (m³/s)": round(float(s.max()), 3),
                 "Volume (hm³)": round(float(s.sum() * _DT_SECONDS / 1e6), 3),
             })
@@ -252,10 +321,14 @@ if "network_result" in st.session_state:
         )
 
     with tab_raw:
-        st.dataframe(display_df.round(4), use_container_width=True)
+        raw_df = pd.concat(
+            {"total": display_df, "natural": natural_display}, axis=1
+        ).round(4)
+        raw_df.columns = [f"{name}_{kind}" for kind, name in raw_df.columns]
+        st.dataframe(raw_df, use_container_width=True)
         st.download_button(
             "📥 Exportar resultados (CSV)",
-            data=display_df.round(4).to_csv().encode(),
+            data=raw_df.to_csv().encode(),
             file_name="resultado_rede.csv",
             mime="text/csv",
         )
