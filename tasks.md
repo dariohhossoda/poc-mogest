@@ -69,6 +69,9 @@
 - [x] opção de calibração rápida (`fast_calibrate`) na Simulação SMAP
 - [x] README
 - [ ] merge `claude` → `master` e conferir o deploy no Streamlit Cloud
+- [x] trocar `use_container_width` (removido do Streamlit) por `width`
+- [x] `Visualização Espacial`: `Scattermapbox` → `Scattermap` (removido no plotly 7)
+- [x] volume `data/` com `:z` no `docker-compose.yml` (SELinux)
 
 ## Correções
 

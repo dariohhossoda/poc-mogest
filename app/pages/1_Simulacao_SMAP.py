@@ -99,7 +99,7 @@ edited_df = st.data_editor(
         "Min": st.column_config.NumberColumn("Min", disabled=True),
         "Max": st.column_config.NumberColumn("Max", disabled=True),
     },
-    use_container_width=False,
+    width="content",
     key=params_key,
 )
 params = edited_df["Valor"].to_dict()
@@ -210,17 +210,17 @@ if "sim" in st.session_state:
         "📈 Hidrograma", "📊 Volume Acumulado", "📅 Médias Mensais", "📋 Estatísticas Anuais"
     ])
     with tab_hyd:
-        st.plotly_chart(plot_hydrograph(sim, index=index, obs=obs), use_container_width=True)
+        st.plotly_chart(plot_hydrograph(sim, index=index, obs=obs), width="stretch")
     with tab_vol:
-        st.plotly_chart(plot_cumulative_volume(sim, index=index, obs=obs, dt_seconds=dt_seconds), use_container_width=True)
+        st.plotly_chart(plot_cumulative_volume(sim, index=index, obs=obs, dt_seconds=dt_seconds), width="stretch")
     with tab_mon:
-        st.plotly_chart(plot_monthly_averages(sim, index=index, obs=obs), use_container_width=True)
+        st.plotly_chart(plot_monthly_averages(sim, index=index, obs=obs), width="stretch")
     with tab_ann:
         stats = annual_stats(sim, index, obs=obs, dt_seconds=dt_seconds)
         if stats.empty:
             st.info("Série temporal insuficiente para estatísticas anuais (mínimo: 1 ano completo com ≥ 90 % dos registros esperados).")
         else:
-            st.dataframe(stats, use_container_width=True)
+            st.dataframe(stats, width="stretch")
             st.download_button(
                 "📥 Baixar estatísticas anuais (CSV)",
                 data=stats.to_csv().encode(),
@@ -298,11 +298,11 @@ if "sim" in st.session_state:
                 cr = st.session_state["calib_result"]
                 st.plotly_chart(
                     plot_hydrograph(cr["sim"], index=index, obs=obs, title="Hidrograma Calibrado"),
-                    use_container_width=True,
+                    width="stretch",
                 )
                 col_kge, *_ = st.columns(4)
                 col_kge.metric("KGE calibrado", f"{cr['kge']:.3f}")
                 st.write("**Parâmetros calibrados:**")
                 calib_df = pd.DataFrame.from_dict(cr["params"], orient="index", columns=["Valor"]).round(4)
                 calib_df.index.name = "Parâmetro"
-                st.dataframe(calib_df, use_container_width=False)
+                st.dataframe(calib_df, width="content")

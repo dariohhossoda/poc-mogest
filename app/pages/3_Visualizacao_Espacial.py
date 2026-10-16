@@ -131,7 +131,7 @@ if "downstream_id" in spatial_df.columns:
         ds_id = str(row.get("downstream_id", ""))
         if ds_id and ds_id not in ("nan", "") and ds_id in idx_map:
             ds = idx_map[ds_id]
-            fig.add_trace(go.Scattermapbox(
+            fig.add_trace(go.Scattermap(
                 lat=[float(row["lat"]), float(ds["lat"])],
                 lon=[float(row["lon"]), float(ds["lon"])],
                 mode="lines",
@@ -141,12 +141,12 @@ if "downstream_id" in spatial_df.columns:
             ))
 
 # Basin markers
-fig.add_trace(go.Scattermapbox(
+fig.add_trace(go.Scattermap(
     lat=spatial_df["lat"].tolist(),
     lon=spatial_df["lon"].tolist(),
     text=hover_texts,
     mode="markers",
-    marker=go.scattermapbox.Marker(
+    marker=go.scattermap.Marker(
         size=marker_size,
         color=peaks_numeric if has_results else ["steelblue"] * len(spatial_df),
         colorscale="YlOrRd" if has_results else None,
@@ -160,8 +160,8 @@ fig.add_trace(go.Scattermapbox(
 ))
 
 fig.update_layout(
-    mapbox_style="open-street-map",
-    mapbox=dict(
+    map_style="open-street-map",
+    map=dict(
         zoom=8,
         center=dict(
             lat=float(spatial_df["lat"].mean()),
@@ -173,7 +173,7 @@ fig.update_layout(
     showlegend=False,
 )
 
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width="stretch")
 
 if has_results:
     st.caption("Marcadores coloridos (amarelo → vermelho) por vazão de pico da última simulação.")

@@ -153,7 +153,7 @@ else:
         st.stop()
 
 st.subheader("Parâmetros dos Subcatchments")
-st.dataframe(params_df, use_container_width=True)
+st.dataframe(params_df, width="stretch")
 
 _tuin = pd.to_numeric(params_df.get("tuin"), errors="coerce")
 if _tuin is not None and (_tuin > 0).any() and (_tuin <= 1).all():
@@ -255,7 +255,7 @@ if "network_result" in st.session_state:
                         )
         st.plotly_chart(
             plot_network_hydrograph(display_df, colors=colors_all),
-            use_container_width=True,
+            width="stretch",
         )
 
     with tab_out:
@@ -275,7 +275,7 @@ if "network_result" in st.session_state:
                     title="Hidrogramas dos Exutórios",
                     colors=colors_out,
                 ),
-                use_container_width=True,
+                width="stretch",
             )
         else:
             st.info("Nenhum exutório identificado (todas as bacias têm jusante definida).")
@@ -296,7 +296,7 @@ if "network_result" in st.session_state:
         fig_nat.for_each_trace(
             lambda t: t.update(name=t.name.removeprefix("Subcatchment "))
         )
-        st.plotly_chart(fig_nat, use_container_width=True)
+        st.plotly_chart(fig_nat, width="stretch")
 
     with tab_stats:
         stats_rows = []
@@ -311,7 +311,7 @@ if "network_result" in st.session_state:
                 "Volume (hm³)": round(float(s.sum() * _DT_SECONDS / 1e6), 3),
             })
         stats_df = pd.DataFrame(stats_rows).set_index("Bacia")
-        st.dataframe(stats_df, use_container_width=True)
+        st.dataframe(stats_df, width="stretch")
         st.download_button(
             "📥 Baixar estatísticas (CSV)",
             data=stats_df.to_csv().encode(),
@@ -325,7 +325,7 @@ if "network_result" in st.session_state:
             {"total": display_df, "natural": natural_display}, axis=1
         ).round(4)
         raw_df.columns = [f"{name}_{kind}" for kind, name in raw_df.columns]
-        st.dataframe(raw_df, use_container_width=True)
+        st.dataframe(raw_df, width="stretch")
         st.download_button(
             "📥 Exportar resultados (CSV)",
             data=raw_df.to_csv().encode(),
