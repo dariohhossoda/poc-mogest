@@ -60,6 +60,16 @@
 ### Visualização Espacial
 - [x] permitir upload de arquivos `.geojson`
 
+## Atualizar para mogestpy 2.1
+
+- [x] sincronizar `claude` com a `master`
+- [x] exigir `mogestpy>=2.1.0` (`pyproject.toml` e `requirements.txt`)
+- [x] Rede Hidrológica via `run_network` do mogestpy, com vazão natural × total
+- [x] opção de propagação Muskingum-Cunge na Rede Hidrológica
+- [x] opção de calibração rápida (`fast_calibrate`) na Simulação SMAP
+- [x] README
+- [ ] merge `claude` → `master` e conferir o deploy no Streamlit Cloud
+
 ## Correções
 
 - [x] corrigir erro com import de csv ValueError: Missing column provided to parse_dates: date
