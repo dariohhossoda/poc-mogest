@@ -268,6 +268,15 @@ if "sim" in st.session_state:
                 options=calib_options,
                 default=calib_options[:4],
             )
+            calib_mode = st.radio(
+                "Método",
+                ["Evolução diferencial", "Rápida (4 casas decimais)"],
+                horizontal=True,
+                help=(
+                    "Rápida: evolução diferencial com parâmetros inteiros "
+                    "(×10⁴), em geral mais rápida e com precisão de 4 casas."
+                ),
+            )
             if st.button("Calibrar parâmetros", disabled=not sel_vars):
                 with st.spinner("Calibrando... pode levar alguns segundos."):
                     calib_params, calib_kge = calibrate_fn(
@@ -276,6 +285,7 @@ if "sim" in st.session_state:
                         st.session_state["sim_etp"],
                         obs,
                         sel_vars,
+                        fast=calib_mode.startswith("Rápida"),
                     )
                     calib_sim = run_fn(calib_params, st.session_state["sim_prec"], st.session_state["sim_etp"])
                     st.session_state["calib_result"] = {
