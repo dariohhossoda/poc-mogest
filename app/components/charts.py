@@ -1,3 +1,5 @@
+import json
+
 import numpy as np
 import plotly.graph_objects as go
 import pandas as pd
@@ -114,5 +116,115 @@ def plot_network_hydrograph(
         xaxis_title="Tempo",
         yaxis_title="Vazão (m³/s)",
         hovermode="x unified",
+    )
+    return fig
+
+
+BASEMAPS = {
+    "Cinza claro": "carto-positron",
+    "Escuro": "carto-darkmatter",
+    "Sem fundo": "white-bg",
+}
+
+_TRANSPARENT = [[0, "rgba(0,0,0,0)"], [1, "rgba(0,0,0,0)"]]
+
+
+def _map_view(gdf) -> dict:
+    """Center and zoom that fit the polygons."""
+    minx, miny, maxx, maxy = gdf.total_bounds
+    extent = max(maxx - minx, (maxy - miny) * 1.6, 1e-3)
+    zoom = float(np.clip(np.log2(360.0 / extent) - 1.2, 1, 14))
+    center = {"lon": (minx + maxx) / 2, "lat": (miny + maxy) / 2}
+    return {"center": center, "zoom": zoom}
+
+
+def plot_network_map(
+    gdf,
+    values: pd.Series,
+    value_label: str,
+    names: dict,
+    outlet_ids: list,
+    links: pd.DataFrame,
+    basemap: str = "carto-positron",
+    selected=None,
+) -> go.Figure:
+    """
+    Choropleth of subcatchments colored by ``values`` (indexed by basin id).
+
+    ``gdf`` is a WGS84 GeoDataFrame with ``id``; ``links`` has lon0/lat0 →
+    lon1/lat1 segments from upstream to downstream basins. Basin markers carry
+    the id in ``customdata`` so a map selection identifies the basin.
+    """
+    dark = basemap == "carto-darkmatter"
+    edge = "#e0e0e0" if dark else "#404040"
+    geojson = json.loads(gdf[["id", "geometry"]].to_json())
+    ids = gdf["id"].tolist()
+    label = [names.get(i, str(i)) for i in ids]
+    z = [values.get(i, np.nan) for i in ids]
+
+    fig = go.Figure()
+    fig.add_trace(go.Choroplethmap(
+        geojson=geojson,
+        featureidkey="properties.id",
+        locations=ids,
+        z=z,
+        text=label,
+        colorscale="Blues",
+        marker_opacity=0.75,
+        marker_line_color=edge,
+        marker_line_width=1,
+        colorbar=dict(title=value_label),
+        hovertemplate="<b>%{text}</b><br>" + value_label + ": %{z:.3f}<extra></extra>",
+        name="Sub-bacias",
+    ))
+
+    if selected is not None and selected in ids:
+        fig.add_trace(go.Choroplethmap(
+            geojson=geojson,
+            featureidkey="properties.id",
+            locations=[selected],
+            z=[0],
+            colorscale=_TRANSPARENT,
+            showscale=False,
+            marker_line_color="#d62728",
+            marker_line_width=3,
+            hoverinfo="skip",
+            name="Selecionada",
+        ))
+
+    if not links.empty:
+        lon, lat = [], []
+        for _, seg in links.iterrows():
+            lon += [seg["lon0"], seg["lon1"], None]
+            lat += [seg["lat0"], seg["lat1"], None]
+        fig.add_trace(go.Scattermap(
+            lon=lon, lat=lat, mode="lines",
+            line=dict(color=edge, width=2),
+            hoverinfo="skip",
+            name="Ligação montante → jusante",
+        ))
+
+    points = gdf.geometry.representative_point()
+    is_outlet = [i in outlet_ids for i in ids]
+    fig.add_trace(go.Scattermap(
+        lon=points.x, lat=points.y,
+        mode="markers+text",
+        text=label,
+        textposition="top center",
+        textfont=dict(color=edge),
+        customdata=ids,
+        marker=dict(
+            size=[14 if o else 8 for o in is_outlet],
+            color=["#d62728" if o else edge for o in is_outlet],
+        ),
+        hovertemplate="<b>%{text}</b><extra></extra>",
+        name="Exutório (vermelho) / sub-bacia",
+    ))
+
+    fig.update_layout(
+        map=dict(style=basemap, **_map_view(gdf)),
+        margin=dict(l=0, r=0, t=10, b=0),
+        height=520,
+        showlegend=False,
     )
     return fig

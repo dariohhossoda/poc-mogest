@@ -3,7 +3,18 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from app.components.charts import NETWORK_DEFAULT_COLORS, plot_network_hydrograph
+from app.components.charts import (
+    BASEMAPS,
+    NETWORK_DEFAULT_COLORS,
+    plot_network_hydrograph,
+    plot_network_map,
+)
+from core.geo import (
+    basin_links,
+    load_polygons,
+    missing_param_columns,
+    polygons_to_params,
+)
 from core.io import load_params, load_timeseries
 from core.models import CUNGE_COLUMNS, run_network_simulation
 
@@ -17,6 +28,7 @@ st.markdown(
 PARAMS_PATH = Path("data/example_network_params.csv")
 PREC_PATH = Path("data/example_network_prec.csv")
 ETP_PATH = Path("data/example_network_etp.csv")
+POLYGONS_PATH = Path("data/example_network_basins.geojson")
 
 _DT_SECONDS = 86400.0  # SmapD is daily
 
@@ -71,6 +83,118 @@ def _map_series_columns(
     return df.rename(columns=rename_map)
 
 
+_MAP_METRICS = (
+    "Pico (m³/s)",
+    "Média (m³/s)",
+    "Volume (hm³)",
+    "Fração de montante (%)",
+    "Vazão no instante (m³/s)",
+)
+
+
+def _map_values(metric: str, total: pd.DataFrame, natural: pd.DataFrame, when=None):
+    if metric.startswith("Pico"):
+        return total.max()
+    if metric.startswith("Média"):
+        return total.mean()
+    if metric.startswith("Volume"):
+        return total.sum() * _DT_SECONDS / 1e6
+    if metric.startswith("Fração"):
+        mean_total = total.mean()
+        return (1 - natural.mean() / mean_total.where(mean_total > 0)) * 100
+    return total.loc[when]
+
+
+def _clicked_basin(selection, ids: list):
+    """Basin id from a plotly map selection (marker customdata or polygon)."""
+    for point in (selection or {}).get("selection", {}).get("points", []):
+        value = point.get("customdata", point.get("location"))
+        if isinstance(value, list):
+            value = value[0] if value else None
+        if value is not None:
+            try:
+                value = int(value)
+            except (TypeError, ValueError):
+                pass
+            if value in ids:
+                return value
+    return None
+
+
+def _render_map_tab(gdf, total, natural, params, name_map, outlet_ids):
+    if gdf is None:
+        st.info(
+            "Carregue os polígonos das sub-bacias (GeoJSON, shapefile .zip ou "
+            "GeoPackage) junto com os dados e execute de novo para ver o mapa."
+        )
+        return
+
+    ids = [i for i in total.columns if i in set(gdf["id"])]
+    if not ids:
+        st.warning("Nenhum `id` dos polígonos corresponde às sub-bacias simuladas.")
+        return
+
+    c_metric, c_base, c_when = st.columns([2, 1, 3])
+    metric = c_metric.selectbox("Métrica", _MAP_METRICS, key="map_metric")
+    basemap = BASEMAPS[c_base.selectbox("Fundo", list(BASEMAPS), key="map_basemap")]
+    when = None
+    if metric.startswith("Vazão no instante"):
+        when = c_when.select_slider(
+            "Instante",
+            options=list(total.index),
+            value=total[ids].sum(axis=1).idxmax(),
+            format_func=lambda t: pd.Timestamp(t).strftime("%Y-%m-%d"),
+            key="map_when",
+        )
+
+    labels = {i: name_map.get(i, str(i)) for i in ids}
+    clicked = _clicked_basin(st.session_state.get("network_map"), ids)
+    if clicked is not None and clicked != st.session_state.get("map_last_click"):
+        st.session_state["map_last_click"] = clicked
+        st.session_state["map_basin"] = clicked
+    if st.session_state.get("map_basin") not in ids:
+        st.session_state["map_basin"] = next((o for o in outlet_ids if o in ids), ids[0])
+
+    downstream = params.set_index("id")["downstream_id"]
+    col_map, col_hydro = st.columns([3, 2])
+    with col_map:
+        st.plotly_chart(
+            plot_network_map(
+                gdf[gdf["id"].isin(ids)],
+                _map_values(metric, total[ids], natural[ids], when),
+                metric,
+                labels,
+                outlet_ids,
+                basin_links(gdf, downstream),
+                basemap=basemap,
+                selected=st.session_state["map_basin"],
+            ),
+            width="stretch",
+            on_select="rerun",
+            selection_mode="points",
+            key="network_map",
+        )
+        st.caption(
+            "Exutórios em vermelho; linhas ligam cada sub-bacia à de jusante. "
+            "Clique numa sub-bacia para ver o hidrograma."
+        )
+    with col_hydro:
+        basin = st.selectbox(
+            "Sub-bacia", ids, format_func=lambda i: labels[i], key="map_basin"
+        )
+        fig = plot_network_hydrograph(
+            pd.DataFrame({"Natural": natural[basin], "Total": total[basin]}),
+            title=labels[basin],
+        )
+        fig.for_each_trace(
+            lambda t: t.update(name=t.name.removeprefix("Subcatchment "))
+        )
+        if when is not None:
+            fig.add_vline(x=when, line_dash="dot", line_color="#808080")
+        fig.update_layout(height=470, legend=dict(orientation="h", y=-0.15))
+        st.plotly_chart(fig, width="stretch")
+
+
 # --- Checkbox first; uploaders only shown when example is OFF ---
 if "use_network_example" not in st.session_state:
     st.session_state["use_network_example"] = True
@@ -81,9 +205,10 @@ if use_example:
     params_df = load_params(PARAMS_PATH)
     prec_df = _load_network_series(PREC_PATH)
     etp_df = _load_network_series(ETP_PATH)
+    polygons_gdf = load_polygons(POLYGONS_PATH)
     st.info("Usando rede de exemplo com 2 subcatchments.")
 else:
-    col_dl1, col_dl2, col_dl3 = st.columns(3)
+    col_dl1, col_dl2, col_dl3, col_dl4 = st.columns(4)
     with col_dl1:
         st.download_button(
             "📥 Template — parâmetros",
@@ -112,20 +237,62 @@ else:
             mime="text/csv",
         )
         st.caption("Colunas: `date, id1, id2, …` — uma coluna de ETP por subcatchment.")
+    with col_dl4:
+        st.download_button(
+            "📥 Template — polígonos",
+            data=POLYGONS_PATH.read_bytes(),
+            file_name="template_rede_poligonos.geojson",
+            mime="application/geo+json",
+        )
+        st.caption(
+            "Opcional. GeoJSON, shapefile (.zip) ou GeoPackage com `id` "
+            "(e `name`). Com todas as colunas de parâmetros, dispensa a tabela."
+        )
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     with col1:
         params_file = st.file_uploader("Parâmetros da rede", type=["csv", "xlsx"])
     with col2:
         prec_file = st.file_uploader("Precipitação", type=["csv", "xlsx"], key="prec_upload")
     with col3:
         etp_file = st.file_uploader("ETP", type=["csv", "xlsx"], key="etp_upload")
+    with col4:
+        polygons_file = st.file_uploader(
+            "Polígonos (opcional)",
+            type=["geojson", "json", "zip", "gpkg"],
+            key="polygons_upload",
+        )
 
-    if not (params_file and prec_file and etp_file):
-        st.warning("Carregue os três arquivos (parâmetros, precipitação e ETP) para continuar.")
+    polygons_gdf = None
+    if polygons_file:
+        try:
+            polygons_gdf = load_polygons(polygons_file)
+        except Exception as e:  # malformed geodata raises many error types
+            st.error(f"Erro ao ler os polígonos: {e}")
+            st.stop()
+
+    if params_file:
+        params_df = load_params(params_file)
+    elif polygons_gdf is not None and not missing_param_columns(polygons_gdf):
+        params_df = polygons_to_params(polygons_gdf)
+        st.info(
+            "Parâmetros lidos dos atributos dos polígonos; `area` vem da geometria "
+            "quando o atributo falta."
+        )
+    elif polygons_gdf is not None:
+        st.warning(
+            "Os polígonos não têm todos os parâmetros "
+            f"({', '.join(missing_param_columns(polygons_gdf))}): carregue também a "
+            "tabela de parâmetros."
+        )
+        st.stop()
+    else:
+        st.warning("Carregue os parâmetros (tabela ou polígonos com atributos).")
         st.stop()
 
-    params_df = load_params(params_file)
+    if not (prec_file and etp_file):
+        st.warning("Carregue a precipitação e a ETP para continuar.")
+        st.stop()
 
     if "downstream_id" not in params_df.columns:
         st.warning("Coluna `downstream_id` não encontrada nos parâmetros.")
@@ -182,8 +349,21 @@ if method == "muskingum_cunge":
         st.stop()
 
 basin_ids = params_df["id"].astype(int).tolist()
+if polygons_gdf is not None:
+    _no_polygon = sorted(set(basin_ids) - set(polygons_gdf["id"]))
+    if _no_polygon:
+        st.warning(f"Sub-bacias sem polígono (fora do mapa): {_no_polygon}")
 if set(st.session_state.get("basin_names", {}).keys()) != set(basin_ids):
-    st.session_state["basin_names"] = {bid: str(bid) for bid in basin_ids}
+    _names_source = (
+        polygons_gdf.set_index("id")["name"]
+        if polygons_gdf is not None and "name" in polygons_gdf.columns
+        else params_df.set_index("id")["name"]
+        if "name" in params_df.columns
+        else pd.Series(dtype=str)
+    )
+    st.session_state["basin_names"] = {
+        bid: str(_names_source.get(bid, bid)) for bid in basin_ids
+    }
 
 if st.button("▶ Executar roteamento", type="primary"):
     with st.spinner("Simulando rede hidrológica..."):
@@ -198,6 +378,7 @@ if st.button("▶ Executar roteamento", type="primary"):
         st.session_state["network_natural"] = natural_df
         st.session_state["network_params"] = params_df.copy()
         st.session_state["network_method"] = method_label
+        st.session_state["network_polygons"] = polygons_gdf
 
 if "network_result" in st.session_state:
     result_df = st.session_state["network_result"]
@@ -222,10 +403,11 @@ if "network_result" in st.session_state:
     natural_display = st.session_state["network_natural"].rename(columns=name_map)
     st.caption(f"Método: {st.session_state.get('network_method', '')}")
 
-    tab_all, tab_out, tab_nat, tab_stats, tab_raw = st.tabs([
+    tab_all, tab_out, tab_nat, tab_map, tab_stats, tab_raw = st.tabs([
         "📈 Todos os Subcatchments",
         "🔵 Exutórios",
         "🌱 Natural × Total",
+        "🗺️ Mapa",
         "📊 Estatísticas",
         "📋 Dados Brutos",
     ])
@@ -297,6 +479,16 @@ if "network_result" in st.session_state:
             lambda t: t.update(name=t.name.removeprefix("Subcatchment "))
         )
         st.plotly_chart(fig_nat, width="stretch")
+
+    with tab_map:
+        _render_map_tab(
+            st.session_state.get("network_polygons"),
+            result_df,
+            st.session_state["network_natural"],
+            params_stored,
+            name_map,
+            outlet_ids,
+        )
 
     with tab_stats:
         stats_rows = []
