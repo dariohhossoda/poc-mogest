@@ -4,6 +4,6 @@ services:
     ports:
       - "8501:8501"
     volumes:
-      - ./data:/app/data
+      - ./data:/app/data:z
     environment:
       - PYTHONUNBUFFERED=1

@@ -39,8 +39,12 @@
 - [x] permitir deploy em streamlit, resolvendo caminhos para evitar erro ModuleNotFoundError: No module named 'app'
 
 ### main
+- [x] substituir nome por `Início`
+- [x] adicionar link da documentação do readthedocs do mogestpy
 
 ### Simulação SMAP
+- [x] remover SmapD e SmapM do nome da escala de escolha nas opções
+- [x] adicionar range dos parâmetros na tabela
 
 ### Rede Hidrológica
 - [x] Alterar upload de série temporal para dois uploads, um arquivo de precipitação e outro de evapotranspiração com as mesmas colunas date, id1, id2...
@@ -50,9 +54,24 @@
 - [x] Adicioanr hidrograma somente dos exutórios
 - [x] Permitir o usuário mudar a cor do gráfico
 - [x] Deixar botão de mudar cor menor
+- [x] Permitir o usuário mudar o nome da bacia
+- [x] Deixar o botão de nome ao lado do botão de cores no mesmo estilo
 
 ### Visualização Espacial
+- [x] permitir upload de arquivos `.geojson`
 
+## Atualizar para mogestpy 2.1
+
+- [x] sincronizar `claude` com a `master`
+- [x] exigir `mogestpy>=2.1.0` (`pyproject.toml` e `requirements.txt`)
+- [x] Rede Hidrológica via `run_network` do mogestpy, com vazão natural × total
+- [x] opção de propagação Muskingum-Cunge na Rede Hidrológica
+- [x] opção de calibração rápida (`fast_calibrate`) na Simulação SMAP
+- [x] README
+- [ ] merge `claude` → `master` e conferir o deploy no Streamlit Cloud
+- [x] trocar `use_container_width` (removido do Streamlit) por `width`
+- [x] `Visualização Espacial`: `Scattermapbox` → `Scattermap` (removido no plotly 7)
+- [x] volume `data/` com `:z` no `docker-compose.yml` (SELinux)
 
 ## Correções
 

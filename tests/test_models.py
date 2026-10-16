@@ -25,3 +25,15 @@ def test_smap_monthly_output_length():
 def test_smap_monthly_non_negative():
     result = run_smap_monthly({}, PREC_M, ETP_M)
     assert all(v >= 0 for v in result)
+
+
+def test_fast_calibration_recovers_kge():
+    from core.models import calibrate_smap_daily
+
+    true_params = {"Str": 400.0, "kkt": 60.0}
+    obs = run_smap_daily(true_params, PREC_D, ETP_D)
+    calibrated, kge_value = calibrate_smap_daily(
+        {}, PREC_D, ETP_D, obs, ["Str", "kkt"], fast=True
+    )
+    assert set(calibrated) == {"Str", "kkt"}
+    assert kge_value > 0.9

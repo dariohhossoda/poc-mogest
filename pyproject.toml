@@ -8,10 +8,10 @@ version = "0.1.0"
 requires-python = ">=3.11,<4.0"
 
 dependencies = [
-    "mogestpy>=2.0.0",
-    "streamlit>=1.35",
+    "mogestpy>=2.1.0",
+    "streamlit>=1.52",
     "pandas>=2.2",
-    "plotly>=5.20",
+    "plotly>=5.24",
     "numpy>=1.26",
     "openpyxl>=3.1",
 ]
