@@ -129,9 +129,130 @@ BASEMAPS = {
 _TRANSPARENT = [[0, "rgba(0,0,0,0)"], [1, "rgba(0,0,0,0)"]]
 
 
+_RIVER_COLOR = "#4a90c2"
+
+
+def _line_coords(geoms) -> tuple[list, list]:
+    """lon/lat lists of (multi)line geometries, segments split by None."""
+    lon, lat = [], []
+    for geom in geoms:
+        parts = getattr(geom, "geoms", [geom])
+        for part in parts:
+            xs, ys = part.xy
+            lon += list(xs) + [None]
+            lat += list(ys) + [None]
+    return lon, lat
+
+
+def _rivers_trace(rivers) -> go.Scattermap:
+    lon, lat = _line_coords(rivers.geometry)
+    return go.Scattermap(
+        lon=lon, lat=lat, mode="lines",
+        line=dict(color=_RIVER_COLOR, width=1.5),
+        hoverinfo="skip",
+        name="Rios",
+    )
+
+
+def plot_delineation_preview(
+    points: pd.DataFrame,
+    bbox: tuple | None = None,
+    polygons=None,
+    rivers=None,
+    snapped=None,
+    basemap: str = "carto-positron",
+) -> go.Figure:
+    """
+    Map of the delineation inputs and, once it ran, its result.
+
+    ``points`` has id, lat, lon and kind ("Exutório" or "Posto"); ``bbox`` is
+    the GLO-30 window (west, south, east, north). ``polygons``, ``rivers`` and
+    ``snapped`` (outlets moved to the river) are WGS84 GeoDataFrames.
+    """
+    dark = basemap == "carto-darkmatter"
+    edge = "#e0e0e0" if dark else "#404040"
+    fig = go.Figure()
+
+    if polygons is not None and len(polygons):
+        lon, lat = _line_coords(polygons.geometry.boundary)
+        fig.add_trace(go.Scattermap(
+            lon=lon, lat=lat, mode="lines",
+            line=dict(color=edge, width=1.5),
+            hoverinfo="skip",
+            name="Sub-bacias",
+        ))
+        centers = polygons.geometry.representative_point()
+        fig.add_trace(go.Scattermap(
+            lon=centers.x, lat=centers.y, mode="text",
+            text=polygons["name"], textfont=dict(color=edge),
+            hoverinfo="skip", name="Nomes",
+        ))
+    if rivers is not None and len(rivers):
+        fig.add_trace(_rivers_trace(rivers))
+    if bbox is not None:
+        west, south, east, north = bbox
+        fig.add_trace(go.Scattermap(
+            lon=[west, east, east, west, west],
+            lat=[south, south, north, north, south],
+            mode="lines",
+            line=dict(color="#808080", width=1),
+            hoverinfo="skip",
+            name="Janela do DEM",
+        ))
+    if snapped is not None and len(snapped):
+        fig.add_trace(go.Scattermap(
+            lon=snapped.geometry.x, lat=snapped.geometry.y,
+            mode="markers",
+            marker=dict(size=9, color=_RIVER_COLOR),
+            text=snapped["name"],
+            customdata=snapped["dist_snap_m"],
+            hovertemplate="<b>%{text}</b> no rio<br>deslocado %{customdata:.0f} m"
+            "<extra></extra>",
+            name="Ponto no rio",
+        ))
+    if len(points):
+        is_outlet = points["kind"].eq("Exutório").tolist()
+        fig.add_trace(go.Scattermap(
+            lon=points["lon"], lat=points["lat"],
+            mode="markers",
+            marker=dict(
+                size=[14 if o else 10 for o in is_outlet],
+                color=["#d62728" if o else edge for o in is_outlet],
+            ),
+            text=points["id"],
+            customdata=points["kind"],
+            hovertemplate="<b>%{text}</b> (%{customdata})<extra></extra>",
+            name="Pontos informados",
+        ))
+
+    if polygons is not None and len(polygons):
+        view = _map_view(polygons)
+    elif bbox is not None:
+        view = _map_view_bounds(bbox)
+    elif len(points):
+        view = _map_view_bounds(
+            (points["lon"].min(), points["lat"].min(),
+             points["lon"].max(), points["lat"].max())
+        )
+    else:
+        view = {"center": {"lon": -47.0, "lat": -15.0}, "zoom": 3}
+    fig.update_layout(
+        map=dict(style=basemap, **view),
+        margin=dict(l=0, r=0, t=10, b=0),
+        height=460,
+        showlegend=False,
+    )
+    return fig
+
+
 def _map_view(gdf) -> dict:
     """Center and zoom that fit the polygons."""
-    minx, miny, maxx, maxy = gdf.total_bounds
+    return _map_view_bounds(gdf.total_bounds)
+
+
+def _map_view_bounds(bounds) -> dict:
+    """Center and zoom that fit (west, south, east, north)."""
+    minx, miny, maxx, maxy = bounds
     extent = max(maxx - minx, (maxy - miny) * 1.6, 1e-3)
     zoom = float(np.clip(np.log2(360.0 / extent) - 1.2, 1, 14))
     center = {"lon": (minx + maxx) / 2, "lat": (miny + maxy) / 2}
@@ -147,6 +268,7 @@ def plot_network_map(
     links: pd.DataFrame,
     basemap: str = "carto-positron",
     selected=None,
+    rivers=None,
 ) -> go.Figure:
     """
     Choropleth of subcatchments colored by ``values`` (indexed by basin id).
@@ -154,6 +276,7 @@ def plot_network_map(
     ``gdf`` is a WGS84 GeoDataFrame with ``id``; ``links`` has lon0/lat0 →
     lon1/lat1 segments from upstream to downstream basins. Basin markers carry
     the id in ``customdata`` so a map selection identifies the basin.
+    ``rivers`` (optional, WGS84 lines) is drawn under the links.
     """
     dark = basemap == "carto-darkmatter"
     edge = "#e0e0e0" if dark else "#404040"
@@ -191,6 +314,9 @@ def plot_network_map(
             hoverinfo="skip",
             name="Selecionada",
         ))
+
+    if rivers is not None and len(rivers):
+        fig.add_trace(_rivers_trace(rivers))
 
     if not links.empty:
         lon, lat = [], []

@@ -4,6 +4,9 @@ COPY pyproject.toml .
 RUN pip install --no-cache-dir ".[dev]"
 
 FROM python:3.11-slim
+# rasterio wheels link to the system libexpat, missing from the slim image
+RUN apt-get update && apt-get install -y --no-install-recommends libexpat1 \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin

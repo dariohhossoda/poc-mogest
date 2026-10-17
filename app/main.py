@@ -26,6 +26,6 @@ st.markdown(
     | Módulo | Descrição |
     |--------|-----------|
     | **Simulação SMAP** | Modelo hidrológico diário e mensal para uma bacia |
-    | **Rede Hidrológica** | SMAP + Muskingum (linear ou Cunge) em rede de subcatchments, com mapa das sub-bacias |
+    | **Rede Hidrológica** | SMAP + Muskingum (linear ou Cunge) em rede de subcatchments, com mapa das sub-bacias e delimitação a partir de um ponto |
     """
 )

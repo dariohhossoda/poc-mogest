@@ -6,8 +6,18 @@ import streamlit as st
 from app.components.charts import (
     BASEMAPS,
     NETWORK_DEFAULT_COLORS,
+    plot_delineation_preview,
     plot_network_hydrograph,
     plot_network_map,
+)
+from core.delineation import (
+    DEFAULT_RESOLUTION_DEG,
+    TOPOLOGY_COLUMNS,
+    Station,
+    delineate,
+    export_zip,
+    points_bbox,
+    series_template,
 )
 from core.geo import (
     basin_links,
@@ -31,6 +41,15 @@ ETP_PATH = Path("data/example_network_etp.csv")
 POLYGONS_PATH = Path("data/example_network_basins.geojson")
 
 _DT_SECONDS = 86400.0  # SmapD is daily
+
+_SOURCES = ("Enviar arquivos", "Delimitar a partir de um ponto")
+_GLO30 = "Copernicus GLO-30"
+_RESOLUTIONS = {'3" (~90 m)': DEFAULT_RESOLUTION_DEG, '1" (~30 m, nativa)': None}
+# Cachoeira dam (Cantareira system), the mogest-network example
+_EXAMPLE_OUTLET = ("barragem_cachoeira", -23.050833, -46.319278)
+_EXAMPLE_STATIONS = pd.DataFrame(
+    {"id": ["piracaia_montante"], "lat": [-23.0062], "lon": [-46.2395]}
+)
 
 _ROUTING_METHODS = {
     "Muskingum linear (k, x)": "muskingum",
@@ -83,6 +102,221 @@ def _map_series_columns(
     return df.rename(columns=rename_map)
 
 
+def _delineation_points(outlet: Station, stations_df: pd.DataFrame) -> list[Station]:
+    """Outlet plus the filled rows of the stations table."""
+    rows = stations_df.dropna(subset=["id", "lat", "lon"])
+    stations = [
+        Station(str(r["id"]).strip(), float(r["lat"]), float(r["lon"]))
+        for _, r in rows.iterrows()
+        if str(r["id"]).strip()
+    ]
+    return [outlet, *stations]
+
+
+def _render_delineation():
+    """
+    Delineation inputs and result.
+
+    Returns (params, polygons, rivers) of the current delineation, or stops the
+    page while there is none. Everything stays in ``st.session_state``.
+    """
+    st.markdown(
+        "Informe o exutório e, se quiser, postos fluviométricos a montante. As "
+        "sub-bacias saem do DEM com o pyflwdir, como no `mogest-network "
+        "delinear`. O DEM é lido em memória e nada fica gravado no servidor: "
+        "baixe o resultado para guardá-lo. Os valores iniciais são da bacia da "
+        "represa Cachoeira (Sistema Cantareira)."
+    )
+    c_id, c_lat, c_lon = st.columns(3)
+    outlet = Station(
+        c_id.text_input("ID do exutório", value=_EXAMPLE_OUTLET[0], key="dl_outlet_id"),
+        c_lat.number_input(
+            "Latitude", -90.0, 90.0, _EXAMPLE_OUTLET[1], format="%.6f", key="dl_lat"
+        ),
+        c_lon.number_input(
+            "Longitude", -180.0, 180.0, _EXAMPLE_OUTLET[2], format="%.6f", key="dl_lon"
+        ),
+    )
+    st.caption(
+        "Postos a montante (opcional): cada um vira o exutório de uma sub-bacia."
+    )
+    stations_df = st.data_editor(
+        _EXAMPLE_STATIONS,
+        num_rows="dynamic",
+        column_config={
+            "id": st.column_config.TextColumn("ID"),
+            "lat": st.column_config.NumberColumn("Latitude", format="%.6f"),
+            "lon": st.column_config.NumberColumn("Longitude", format="%.6f"),
+        },
+        hide_index=True,
+        key="dl_stations",
+    )
+
+    c_dem, c_res, c_buf = st.columns(3)
+    dem_source = c_dem.radio("DEM", [_GLO30, "GeoTIFF próprio"], key="dl_dem_source")
+    glo30 = dem_source == _GLO30
+    dem_file = None
+    if not glo30:
+        dem_file = c_dem.file_uploader(
+            "GeoTIFF de elevação", type=["tif", "tiff"], key="dl_dem_file"
+        )
+    res_label = c_res.selectbox(
+        "Resolução do GLO-30", list(_RESOLUTIONS), key="dl_res", disabled=not glo30
+    )
+    buffer_km = c_buf.number_input(
+        "Buffer em volta dos pontos (km)",
+        1.0,
+        240.0,
+        25.0,
+        key="dl_buffer",
+        disabled=not glo30,
+        help="Se a bacia encostar na borda, o buffer dobra até 240 km.",
+    )
+    with st.expander("Discretização e propagação"):
+        a1, a2, a3, a4, a5 = st.columns(5)
+        area_min = a1.number_input(
+            "Área mínima automática (km²)",
+            0.0,
+            value=60.0,
+            key="dl_area_min",
+            help="Divide a bacia em sub-bacias de pelo menos essa área; 0 desliga.",
+        )
+        river = a2.number_input("Limiar de rio (km²)", 0.1, value=2.0, key="dl_river")
+        snap = a3.number_input(
+            "Snap máximo (m)", 0.0, value=1500.0, key="dl_snap",
+            help="Distância máxima, ao longo do fluxo, para levar um ponto ao rio.",
+        )
+        celerity = a4.number_input(
+            "Celeridade (m/s)", 0.1, value=1.0, key="dl_celerity",
+            help="k = comprimento do trecho / celeridade (Muskingum linear).",
+        )
+        x_musk = a5.number_input("x do Muskingum", 0.0, 0.5, 0.2, key="dl_x")
+
+    points = _delineation_points(outlet, stations_df)
+    points_df = pd.DataFrame(
+        {
+            "id": [p.id for p in points],
+            "lat": [p.lat for p in points],
+            "lon": [p.lon for p in points],
+            "kind": ["Exutório"] + ["Posto"] * (len(points) - 1),
+        }
+    )
+    dem_key = (dem_file.file_id if dem_file else None) if not glo30 else None
+    inputs = (
+        tuple(points_df.itertuples(index=False)),
+        dem_source,
+        dem_key,
+        _RESOLUTIONS[res_label] if glo30 else None,
+        buffer_km if glo30 else None,
+        area_min,
+        river,
+        snap,
+        celerity,
+        x_musk,
+    )
+
+    if st.button("🗺️ Delimitar sub-bacias", type="primary"):
+        if len(set(points_df["id"])) != len(points_df):
+            st.error("Os IDs do exutório e dos postos devem ser diferentes.")
+            st.stop()
+        if not glo30 and dem_file is None:
+            st.error("Envie o GeoTIFF de elevação ou use o Copernicus GLO-30.")
+            st.stop()
+        with st.status("Delimitando as sub-bacias…", expanded=True) as status:
+            status.write(
+                "A primeira delimitação da sessão compila o pyflwdir (numba) e "
+                "demora mais."
+            )
+            try:
+                result = delineate(
+                    points[0],
+                    points[1:],
+                    dem_bytes=dem_file.getvalue() if dem_file else None,
+                    buffer_km=buffer_km,
+                    resolution_deg=_RESOLUTIONS[res_label],
+                    area_min_km2=area_min or None,
+                    river_threshold_km2=river,
+                    max_snap_m=snap,
+                    celerity_ms=celerity,
+                    x=x_musk,
+                    on_step=status.write,
+                )
+            except (ValueError, RuntimeError) as e:
+                status.update(label="Delimitação falhou", state="error")
+                st.error(str(e))
+                st.stop()
+            status.update(label="Sub-bacias delimitadas", state="complete")
+        st.session_state["delineation"] = result
+        st.session_state["delineation_inputs"] = inputs
+        st.session_state["delineation_run"] = (
+            st.session_state.get("delineation_run", 0) + 1
+        )
+        st.session_state.pop("network_result", None)
+
+    result = st.session_state.get("delineation")
+    current = (
+        result is not None and st.session_state.get("delineation_inputs") == inputs
+    )
+    basemap = BASEMAPS[st.selectbox("Fundo", list(BASEMAPS), key="dl_basemap")]
+    window = points_bbox(points, buffer_km) if glo30 else None
+    st.plotly_chart(
+        plot_delineation_preview(
+            points_df,
+            bbox=result.bbox if current else window,
+            polygons=result.polygons if current else None,
+            rivers=result.rivers if current else None,
+            snapped=result.outlets[result.outlets["posto"]] if current else None,
+            basemap=basemap,
+        ),
+        width="stretch",
+        key="delineation_map",
+    )
+    if result is None:
+        st.info("Ajuste os pontos e clique em **Delimitar sub-bacias**.")
+        st.stop()
+    if not current:
+        st.info("Os dados de entrada mudaram: delimite de novo para continuar.")
+        st.stop()
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Sub-bacias", len(result.params))
+    m2.metric("Área total (km²)", f"{result.params['area'].sum():,.1f}")
+    moved = result.outlets[result.outlets["posto"]]
+    m3.metric("Maior deslocamento até o rio (m)", f"{moved['dist_snap_m'].max():,.0f}")
+    if result.touches_border:
+        st.warning(
+            "A bacia encosta na borda do DEM: a área pode estar truncada. Aumente "
+            "o buffer ou envie um DEM maior."
+        )
+
+    st.caption(
+        "Parâmetros iniciais: a topologia vem do DEM (só leitura); os parâmetros "
+        "SMAP e de propagação podem ser editados."
+    )
+    params = st.data_editor(
+        result.params,
+        disabled=list(TOPOLOGY_COLUMNS),
+        hide_index=True,
+        key=f"dl_params_{st.session_state['delineation_run']}",
+    )
+    d1, d2 = st.columns(2)
+    d1.download_button(
+        "📥 Baixar delimitação (.zip)",
+        data=export_zip(result, params),
+        file_name="delimitacao.zip",
+        mime="application/zip",
+        help="subbacias.gpkg e parametros.csv podem ser enviados de volta.",
+    )
+    d2.download_button(
+        "📥 Template — precipitação e ETP",
+        data=series_template(params),
+        file_name="template_rede_series.csv",
+        mime="text/csv",
+        help="Uma coluna por sub-bacia, com os IDs da delimitação.",
+    )
+    return params, result.polygons, result.rivers
+
+
 _MAP_METRICS = (
     "Pico (m³/s)",
     "Média (m³/s)",
@@ -121,7 +355,7 @@ def _clicked_basin(selection, ids: list):
     return None
 
 
-def _render_map_tab(gdf, total, natural, params, name_map, outlet_ids):
+def _render_map_tab(gdf, total, natural, params, name_map, outlet_ids, rivers=None):
     if gdf is None:
         st.info(
             "Carregue os polígonos das sub-bacias (GeoJSON, shapefile .zip ou "
@@ -168,6 +402,7 @@ def _render_map_tab(gdf, total, natural, params, name_map, outlet_ids):
                 basin_links(gdf, downstream),
                 basemap=basemap,
                 selected=st.session_state["map_basin"],
+                rivers=rivers,
             ),
             width="stretch",
             on_select="rerun",
@@ -206,89 +441,106 @@ if use_example:
     prec_df = _load_network_series(PREC_PATH)
     etp_df = _load_network_series(ETP_PATH)
     polygons_gdf = load_polygons(POLYGONS_PATH)
+    rivers_gdf = None
     st.info("Usando rede de exemplo com 2 subcatchments.")
 else:
-    col_dl1, col_dl2, col_dl3, col_dl4 = st.columns(4)
-    with col_dl1:
-        st.download_button(
-            "📥 Template — parâmetros",
-            data=PARAMS_PATH.read_bytes(),
-            file_name="template_rede_params.csv",
-            mime="text/csv",
-        )
-        st.caption(
-            "Colunas: `id, area, str, crec, capc, kkt, k2t, ai, tuin, ebin, k, x, "
-            "downstream_id`; `tuin` em % (0–100). Para Muskingum-Cunge: "
-            "`length` (m), `q_ref` (m³/s), `manning`, `width` (m), `slope` (m/m)."
-        )
-    with col_dl2:
-        st.download_button(
-            "📥 Template — precipitação",
-            data=PREC_PATH.read_bytes(),
-            file_name="template_rede_prec.csv",
-            mime="text/csv",
-        )
-        st.caption("Colunas: `date, id1, id2, …` — uma coluna de chuva por subcatchment.")
-    with col_dl3:
-        st.download_button(
-            "📥 Template — ETP",
-            data=ETP_PATH.read_bytes(),
-            file_name="template_rede_etp.csv",
-            mime="text/csv",
-        )
-        st.caption("Colunas: `date, id1, id2, …` — uma coluna de ETP por subcatchment.")
-    with col_dl4:
-        st.download_button(
-            "📥 Template — polígonos",
-            data=POLYGONS_PATH.read_bytes(),
-            file_name="template_rede_poligonos.geojson",
-            mime="application/geo+json",
-        )
-        st.caption(
-            "Opcional. GeoJSON, shapefile (.zip) ou GeoPackage com `id` "
-            "(e `name`). Com todas as colunas de parâmetros, dispensa a tabela."
-        )
-
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        params_file = st.file_uploader("Parâmetros da rede", type=["csv", "xlsx"])
-    with col2:
-        prec_file = st.file_uploader("Precipitação", type=["csv", "xlsx"], key="prec_upload")
-    with col3:
-        etp_file = st.file_uploader("ETP", type=["csv", "xlsx"], key="etp_upload")
-    with col4:
-        polygons_file = st.file_uploader(
-            "Polígonos (opcional)",
-            type=["geojson", "json", "zip", "gpkg"],
-            key="polygons_upload",
-        )
-
-    polygons_gdf = None
-    if polygons_file:
-        try:
-            polygons_gdf = load_polygons(polygons_file)
-        except Exception as e:  # malformed geodata raises many error types
-            st.error(f"Erro ao ler os polígonos: {e}")
-            st.stop()
-
-    if params_file:
-        params_df = load_params(params_file)
-    elif polygons_gdf is not None and not missing_param_columns(polygons_gdf):
-        params_df = polygons_to_params(polygons_gdf)
-        st.info(
-            "Parâmetros lidos dos atributos dos polígonos; `area` vem da geometria "
-            "quando o atributo falta."
-        )
-    elif polygons_gdf is not None:
-        st.warning(
-            "Os polígonos não têm todos os parâmetros "
-            f"({', '.join(missing_param_columns(polygons_gdf))}): carregue também a "
-            "tabela de parâmetros."
-        )
-        st.stop()
+    rivers_gdf = None
+    source = st.radio(
+        "Origem das sub-bacias", _SOURCES, horizontal=True, key="network_source"
+    )
+    if source == _SOURCES[1]:
+        params_df, polygons_gdf, rivers_gdf = _render_delineation()
+        col_p, col_e = st.columns(2)
+        with col_p:
+            prec_file = st.file_uploader(
+                "Precipitação", type=["csv", "xlsx"], key="prec_upload"
+            )
+        with col_e:
+            etp_file = st.file_uploader("ETP", type=["csv", "xlsx"], key="etp_upload")
     else:
-        st.warning("Carregue os parâmetros (tabela ou polígonos com atributos).")
-        st.stop()
+        col_dl1, col_dl2, col_dl3, col_dl4 = st.columns(4)
+        with col_dl1:
+            st.download_button(
+                "📥 Template — parâmetros",
+                data=PARAMS_PATH.read_bytes(),
+                file_name="template_rede_params.csv",
+                mime="text/csv",
+            )
+            st.caption(
+                "Colunas: `id, area, str, crec, capc, kkt, k2t, ai, tuin, ebin, k, x, "
+                "downstream_id`; `tuin` em % (0–100). Para Muskingum-Cunge: "
+                "`length` (m), `q_ref` (m³/s), `manning`, `width` (m), `slope` (m/m)."
+            )
+        with col_dl2:
+            st.download_button(
+                "📥 Template — precipitação",
+                data=PREC_PATH.read_bytes(),
+                file_name="template_rede_prec.csv",
+                mime="text/csv",
+            )
+            st.caption("Colunas: `date, id1, id2, …` — uma coluna de chuva por subcatchment.")
+        with col_dl3:
+            st.download_button(
+                "📥 Template — ETP",
+                data=ETP_PATH.read_bytes(),
+                file_name="template_rede_etp.csv",
+                mime="text/csv",
+            )
+            st.caption("Colunas: `date, id1, id2, …` — uma coluna de ETP por subcatchment.")
+        with col_dl4:
+            st.download_button(
+                "📥 Template — polígonos",
+                data=POLYGONS_PATH.read_bytes(),
+                file_name="template_rede_poligonos.geojson",
+                mime="application/geo+json",
+            )
+            st.caption(
+                "Opcional. GeoJSON, shapefile (.zip) ou GeoPackage com `id` "
+                "(e `name`). Com todas as colunas de parâmetros, dispensa a tabela."
+            )
+
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            params_file = st.file_uploader("Parâmetros da rede", type=["csv", "xlsx"])
+        with col2:
+            prec_file = st.file_uploader(
+                "Precipitação", type=["csv", "xlsx"], key="prec_upload"
+            )
+        with col3:
+            etp_file = st.file_uploader("ETP", type=["csv", "xlsx"], key="etp_upload")
+        with col4:
+            polygons_file = st.file_uploader(
+                "Polígonos (opcional)",
+                type=["geojson", "json", "zip", "gpkg"],
+                key="polygons_upload",
+            )
+
+        polygons_gdf = None
+        if polygons_file:
+            try:
+                polygons_gdf = load_polygons(polygons_file)
+            except Exception as e:  # malformed geodata raises many error types
+                st.error(f"Erro ao ler os polígonos: {e}")
+                st.stop()
+
+        if params_file:
+            params_df = load_params(params_file)
+        elif polygons_gdf is not None and not missing_param_columns(polygons_gdf):
+            params_df = polygons_to_params(polygons_gdf)
+            st.info(
+                "Parâmetros lidos dos atributos dos polígonos; `area` vem da geometria "
+                "quando o atributo falta."
+            )
+        elif polygons_gdf is not None:
+            st.warning(
+                "Os polígonos não têm todos os parâmetros "
+                f"({', '.join(missing_param_columns(polygons_gdf))}): carregue "
+                "também a tabela de parâmetros."
+            )
+            st.stop()
+        else:
+            st.warning("Carregue os parâmetros (tabela ou polígonos com atributos).")
+            st.stop()
 
     if not (prec_file and etp_file):
         st.warning("Carregue a precipitação e a ETP para continuar.")
@@ -379,6 +631,7 @@ if st.button("▶ Executar roteamento", type="primary"):
         st.session_state["network_params"] = params_df.copy()
         st.session_state["network_method"] = method_label
         st.session_state["network_polygons"] = polygons_gdf
+        st.session_state["network_rivers"] = rivers_gdf
 
 if "network_result" in st.session_state:
     result_df = st.session_state["network_result"]
@@ -488,6 +741,7 @@ if "network_result" in st.session_state:
             params_stored,
             name_map,
             outlet_ids,
+            rivers=st.session_state.get("network_rivers"),
         )
 
     with tab_stats:
