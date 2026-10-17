@@ -81,6 +81,15 @@
 - [x] remover a página `Visualização Espacial`
 - [ ] merge `claude` → `master` e conferir o mapa no Streamlit Cloud
 
+## Delimitação a partir de um ponto
+
+- [x] cópia de `dem.py`, `delineacao.py` e `muskingum_k.py` do mogest-network em `core/mogest_network/`, com origem e SHA-256
+- [x] DEM em memória (GLO-30 por `/vsicurl/` ou GeoTIFF enviado) e limite de células
+- [x] `core/delineation.py`: ids inteiros, parâmetros SMAP padrão, `k`/`x` pela celeridade, `q_ref`/`width` pela área afluente
+- [x] modo "Delimitar a partir de um ponto" na página Rede, com prévia, tabela editável e download `.zip`
+- [x] leitura de polígonos sem `tempfile` (pyogrio lê os bytes por `/vsimem/`)
+- [ ] merge `claude` → `master` e conferir a delimitação da Cachoeira no Streamlit Cloud
+
 ## Correções
 
 - [x] corrigir erro com import de csv ValueError: Missing column provided to parse_dates: date
