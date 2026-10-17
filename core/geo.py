@@ -1,8 +1,9 @@
 """Subcatchment polygons: reading, area and conversion to network parameters."""
 
-import tempfile
+import io
+import warnings
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import geopandas as gpd
 import pandas as pd
@@ -24,19 +25,34 @@ def _normalize_id(value):
     return int(as_float) if as_float.is_integer() else value
 
 
+def _flat_shapefile_zip(data: bytes) -> bytes:
+    """
+    Rebuild the zip with only the first shapefile's files at its root.
+
+    GDAL reads an in-memory zip only from its root, and uploads often keep the
+    shapefile inside a folder.
+    """
+    with zipfile.ZipFile(io.BytesIO(data)) as src:
+        shapefiles = sorted(n for n in src.namelist() if n.lower().endswith(".shp"))
+        if not shapefiles:
+            raise ValueError("O arquivo .zip não contém um shapefile (.shp).")
+        stem = shapefiles[0][:-4]
+        flat = io.BytesIO()
+        with zipfile.ZipFile(flat, "w") as dst:
+            for member in src.namelist():
+                if member.rsplit(".", 1)[0] == stem:
+                    dst.writestr(PurePosixPath(member).name, src.read(member))
+    return flat.getvalue()
+
+
 def _read_file(data: bytes, suffix: str) -> gpd.GeoDataFrame:
-    """Read from a temporary file so GDAL sees the real extension."""
-    with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / f"upload{suffix}"
-        path.write_bytes(data)
-        if suffix == ".zip":
-            with zipfile.ZipFile(path) as zf:
-                zf.extractall(tmp)
-            shapefiles = sorted(Path(tmp).rglob("*.shp"))
-            if not shapefiles:
-                raise ValueError("O arquivo .zip não contém um shapefile (.shp).")
-            path = shapefiles[0]
-        return gpd.read_file(path)
+    """Read from memory: pyogrio opens bytes through GDAL /vsimem/, not the disk."""
+    if suffix == ".zip":
+        data = _flat_shapefile_zip(data)
+    with warnings.catch_warnings():
+        # GDAL names the in-memory file without the .gpkg extension
+        warnings.filterwarnings("ignore", message=".*non conformant file extension")
+        return gpd.read_file(io.BytesIO(data))
 
 
 def load_polygons(source) -> gpd.GeoDataFrame:
