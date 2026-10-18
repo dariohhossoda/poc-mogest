@@ -34,7 +34,7 @@ include = ["core*", "app*"]
 [tool.pytest.ini_options]
 pythonpath = ["."]
 addopts = ["-m", "not slow"]
-markers = ["slow: reads the Copernicus GLO-30 over the network (run with -m slow)"]
+markers = ["slow: reads the Copernicus GLO-30 or NASA POWER over the network (run with -m slow)"]
 
 [tool.ruff]
 line-length = 88
