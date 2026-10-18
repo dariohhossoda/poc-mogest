@@ -52,7 +52,7 @@ exemplos estão em `data/`.
 | Simulação SMAP | observada (opcional) | `date`, `obs` (m³/s) |
 | Rede Hidrológica | parâmetros | `id`, `area` (km²), `str`, `crec`, `capc`, `kkt`, `k2t`, `ai`, `tuin` (% de 0 a 100), `ebin`, `k`, `x`, `downstream_id` (vazio ou `-999` no exutório) |
 | Rede Hidrológica | parâmetros, só para Muskingum-Cunge | `length` (m), `q_ref` (m³/s), `manning`, `width` (m), `slope` (m/m) do trecho que atravessa a sub-bacia que recebe a vazão de montante; `length = 0` passa a vazão sem propagar |
-| Rede Hidrológica | precipitação e ETP | `date` e uma coluna por sub-bacia, com o `id` como nome |
+| Rede Hidrológica | precipitação e ETP | `date` e uma coluna por sub-bacia, com o `id` como nome (no modo delimitação, podem vir da NASA POWER) |
 | Rede Hidrológica | polígonos (opcional) | GeoJSON, shapefile em `.zip` ou GeoPackage, em qualquer sistema de coordenadas (reprojetado para WGS84), com atributo `id` e, opcionalmente, `name` (no shapefile, `downstream_id` truncado para `downstream` é reconhecido). Se os atributos trouxerem todas as colunas de parâmetros, a tabela de parâmetros é dispensada; `area` em km² é calculada pela geometria quando falta |
 
 ## Delimitação a partir de um ponto
@@ -74,6 +74,32 @@ da sessão. O resultado sai por download: um `.zip` com `subbacias.gpkg` e
 
 Na rede, o Muskingum linear usa `k` (em passos de tempo, dias) e `x` da sub-bacia que
 recebe a vazão de montante, como no `run_network` do MOGESTpy.
+
+### Precipitação e ETP da NASA POWER
+
+Com as sub-bacias delimitadas, a precipitação e a ETP podem vir, cada uma, de um arquivo
+ou da [NASA POWER](https://power.larc.nasa.gov/) (diária, sem chave). A série de cada
+sub-bacia é a média das células da grade que a cruzam, ponderada pela área de interseção,
+com um pedido por célula:
+
+| Série | Produto | Grade | Dia | Desde |
+|---|---|---|---|---|
+| Precipitação | `PRECTOTCORR` (MERRA-2/GEOS-IT, padrão) | 0,5° × 0,625° | hora solar local | 1981 |
+| Precipitação | `IMERG_PRECTOT` (GPM IMERG) | 0,1° | UTC (a API só tem IMERG em UTC) | 2000-06 |
+| ETP | ETo FAO-56 Penman-Monteith, calculada em cada célula com `T2M`, `T2M_MAX`, `T2M_MIN`, `RH2M`, `WS2M`, `ALLSKY_SFC_SW_DWN` e `PS` | 0,5° × 0,625° (radiação 1°) | hora solar local | 1984 |
+
+A POWER deixa os últimos dias vazios enquanto atualiza os produtos: o app corta a série
+no último dia com dado e avisa. Cada download fica limitado a 60 pedidos (células × blocos
+de 10 anos). As séries baixadas saem em CSV no formato do template.
+
+### Origem dos dados
+
+O painel "Origem dos dados" e a aba de mesmo nome nos resultados dizem de onde veio cada
+entrada: o nome e o SHA-256 do arquivo enviado, o arquivo de exemplo, o DEM e os
+parâmetros da delimitação, ou, para a POWER, o produto, a versão da API, as fontes, as
+células e os pesos por sub-bacia, o período e as URLs. O registro vai também para
+`origem_dados.json`, com as frases de citação da POWER e a do Copernicus DEM. A NASA pede
+que publicações com o dado sejam informadas a `larc-power-project@mail.nasa.gov`.
 
 ## Desenvolvimento
 

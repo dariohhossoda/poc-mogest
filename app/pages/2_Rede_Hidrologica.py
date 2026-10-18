@@ -1,3 +1,4 @@
+import datetime as dt
 from pathlib import Path
 
 import pandas as pd
@@ -27,6 +28,13 @@ from core.geo import (
 )
 from core.io import load_params, load_timeseries
 from core.models import CUNGE_COLUMNS, run_network_simulation
+from core.nasa_power import ETO, PRECIPITATION, areal_series, fetch_point
+from core.origin import (
+    delineation_origin,
+    example_origin,
+    file_origin,
+    origins_json,
+)
 
 st.set_page_config(page_title="Rede Hidrológica", page_icon="🏔️", layout="wide")
 st.title("🏔️ Roteamento em Rede Hidrológica")
@@ -50,6 +58,11 @@ _EXAMPLE_OUTLET = ("barragem_cachoeira", -23.050833, -46.319278)
 _EXAMPLE_STATIONS = pd.DataFrame(
     {"id": ["piracaia_montante"], "lat": [-23.0062], "lon": [-46.2395]}
 )
+
+_SERIES_SOURCES = ("Enviar arquivo", "NASA POWER")
+_POWER_START = dt.date(2016, 1, 1)
+# POWER leaves the last days empty while its products catch up
+_POWER_END = dt.date(2025, 12, 31)
 
 _ROUTING_METHODS = {
     "Muskingum linear (k, x)": "muskingum",
@@ -113,11 +126,153 @@ def _delineation_points(outlet: Station, stations_df: pd.DataFrame) -> list[Stat
     return [outlet, *stations]
 
 
+@st.cache_data(ttl=86400, max_entries=256, show_spinner=False)
+def _fetch_power(lat, lon, parameters, start, end, time_standard):
+    """Public data keyed by the cell centre: shared between sessions, in memory."""
+    return fetch_point(lat, lon, parameters, start, end, time_standard)
+
+
+def _power_series(kind: str, label: str, polygons, names: dict):
+    """
+    NASA POWER inputs and download for one series.
+
+    Returns (series, origin) of the current download, or (None, None) while
+    there is none for the current period, product and delineation.
+    """
+    if kind == "prec":
+        product = PRECIPITATION[
+            st.selectbox(
+                "Produto",
+                list(PRECIPITATION),
+                format_func=lambda k: PRECIPITATION[k].label,
+                key="prec_power_product",
+            )
+        ]
+    else:
+        product = ETO
+        st.caption(product.label)
+    c_start, c_end = st.columns(2)
+    start = c_start.date_input(
+        "Início",
+        value=max(_POWER_START, product.first_day),
+        min_value=product.first_day,
+        max_value=dt.date.today(),
+        key=f"{kind}_power_start_{product.key}",
+    )
+    end = c_end.date_input(
+        "Fim",
+        value=_POWER_END,
+        min_value=product.first_day,
+        max_value=dt.date.today(),
+        key=f"{kind}_power_end_{product.key}",
+    )
+    signature = (st.session_state.get("delineation_run"), product.key, start, end)
+
+    if st.button("🛰️ Baixar da NASA POWER", key=f"{kind}_power_go"):
+        with st.status(f"{label}: NASA POWER", expanded=True) as status:
+            try:
+                series, gaps, origin = areal_series(
+                    polygons,
+                    product,
+                    start,
+                    end,
+                    entry=label,
+                    names=names,
+                    fetch=_fetch_power,
+                    on_step=status.write,
+                )
+            except (ValueError, RuntimeError) as e:
+                status.update(label="Download falhou", state="error")
+                st.error(str(e))
+                st.stop()
+            status.update(label=f"{label}: NASA POWER pronta", state="complete")
+        st.session_state[f"power_{kind}"] = {
+            "key": signature,
+            "series": series,
+            "gaps": gaps,
+            "origin": origin,
+        }
+
+    stored = st.session_state.get(f"power_{kind}")
+    if stored is None:
+        st.info("Escolha o período e clique em **Baixar da NASA POWER**.")
+        return None, None
+    if stored["key"] != signature:
+        st.info("O período, o produto ou as sub-bacias mudaram: baixe de novo.")
+        return None, None
+    series, origin = stored["series"], stored["origin"]
+    if series.empty:
+        st.error("A NASA POWER não tem dado nesse período.")
+        return None, None
+    if origin["periodo_com_dado"] != f"{start:%Y-%m-%d} a {end:%Y-%m-%d}":
+        st.warning(
+            f"Período com dado em todas as sub-bacias: {origin['periodo_com_dado']}. "
+            "A POWER deixa os últimos dias vazios enquanto atualiza os produtos."
+        )
+    if stored["gaps"]:
+        days = ", ".join(origin["dias_faltando"][:10])
+        st.error(f"Dias sem dado no meio da série: {days}. Ajuste o período.")
+        return None, None
+    st.caption(
+        f"{len(origin['celulas'])} célula(s) da grade {origin['grade']}; pesos e "
+        "citações em **Origem dos dados**."
+    )
+    st.download_button(
+        f"📥 {label} da NASA POWER (CSV)",
+        data=series.to_csv().encode(),
+        file_name=f"nasa_power_{kind}.csv",
+        mime="text/csv",
+        key=f"{kind}_power_dl",
+        help="No formato do template: pode ser enviado de volta.",
+    )
+    return series, origin
+
+
+def _series_input(kind: str, label: str, polygons, names: dict):
+    """Uploaded file or NASA POWER; returns (series, origin) or (None, None)."""
+    source = st.radio(
+        f"Origem — {label.lower()}",
+        _SERIES_SOURCES,
+        horizontal=True,
+        key=f"{kind}_source",
+    )
+    if source == _SERIES_SOURCES[1]:
+        return _power_series(kind, label, polygons, names)
+    file = st.file_uploader(label, type=["csv", "xlsx"], key=f"{kind}_upload")
+    if file is None:
+        return None, None
+    series = _load_network_series(file)
+    return series, file_origin(label, file.name, file.getvalue(), series)
+
+
+def _render_origins(origins: list[dict], key: str):
+    """One block per input, with its citations, and the JSON download."""
+    for origin in origins:
+        st.markdown(f"**{origin['entrada']}** — {origin['origem']}")
+        details = {
+            k: v
+            for k, v in origin.items()
+            if k not in ("entrada", "origem", "citacao", "aviso")
+        }
+        st.json(details, expanded=False)
+        for line in origin.get("citacao", []):
+            st.caption(line)
+        if origin.get("aviso"):
+            st.caption(origin["aviso"])
+    st.download_button(
+        "📥 Origem dos dados (JSON)",
+        data=origins_json(origins),
+        file_name="origem_dados.json",
+        mime="application/json",
+        key=f"origins_dl_{key}",
+    )
+
+
 def _render_delineation():
     """
     Delineation inputs and result.
 
-    Returns (params, polygons, rivers) of the current delineation, or stops the
+    Returns (params, polygons, rivers, origin) of the current delineation, or stops the
     page while there is none. Everything stays in ``st.session_state``.
     """
     st.markdown(
@@ -248,6 +403,21 @@ def _render_delineation():
             status.update(label="Sub-bacias delimitadas", state="complete")
         st.session_state["delineation"] = result
         st.session_state["delineation_inputs"] = inputs
+        st.session_state["delineation_origin"] = delineation_origin(
+            points=points_df,
+            glo30=glo30,
+            resolution_deg=_RESOLUTIONS[res_label],
+            bbox=result.bbox,
+            dem_name=dem_file.name if dem_file else None,
+            dem_bytes=dem_file.getvalue() if dem_file else None,
+            settings={
+                "area_min_km2": area_min or None,
+                "limiar_rio_km2": river,
+                "snap_max_m": snap,
+                "celeridade_ms": celerity,
+                "x_muskingum": x_musk,
+            },
+        )
         st.session_state["delineation_run"] = (
             st.session_state.get("delineation_run", 0) + 1
         )
@@ -314,7 +484,11 @@ def _render_delineation():
         mime="text/csv",
         help="Uma coluna por sub-bacia, com os IDs da delimitação.",
     )
-    return params, result.polygons, result.rivers
+    origin = {
+        **st.session_state["delineation_origin"],
+        "parametros_editados_na_tela": not params.equals(result.params),
+    }
+    return params, result.polygons, result.rivers, origin
 
 
 _MAP_METRICS = (
@@ -442,21 +616,39 @@ if use_example:
     etp_df = _load_network_series(ETP_PATH)
     polygons_gdf = load_polygons(POLYGONS_PATH)
     rivers_gdf = None
+    origins = [
+        example_origin("Parâmetros da rede", PARAMS_PATH),
+        example_origin("Polígonos", POLYGONS_PATH),
+        example_origin("Precipitação", PREC_PATH, prec_df),
+        example_origin("ETP", ETP_PATH, etp_df),
+    ]
     st.info("Usando rede de exemplo com 2 subcatchments.")
 else:
     rivers_gdf = None
+    origins = []
     source = st.radio(
         "Origem das sub-bacias", _SOURCES, horizontal=True, key="network_source"
     )
     if source == _SOURCES[1]:
-        params_df, polygons_gdf, rivers_gdf = _render_delineation()
+        params_df, polygons_gdf, rivers_gdf, network_origin = _render_delineation()
+        st.subheader("Precipitação e ETP")
+        st.caption(
+            "Cada série vem de um arquivo (uma coluna por sub-bacia, como no "
+            "template) ou da NASA POWER, com a média das células da grade "
+            "ponderada pela área de cada uma na sub-bacia."
+        )
+        names = polygons_gdf.set_index("id")["name"].to_dict()
         col_p, col_e = st.columns(2)
         with col_p:
-            prec_file = st.file_uploader(
-                "Precipitação", type=["csv", "xlsx"], key="prec_upload"
+            prec_df, prec_origin = _series_input(
+                "prec", "Precipitação", polygons_gdf, names
             )
         with col_e:
-            etp_file = st.file_uploader("ETP", type=["csv", "xlsx"], key="etp_upload")
+            etp_df, etp_origin = _series_input("etp", "ETP", polygons_gdf, names)
+        if prec_df is None or etp_df is None:
+            st.warning("Defina a precipitação e a ETP para continuar.")
+            st.stop()
+        origins = [network_origin, prec_origin, etp_origin]
     else:
         col_dl1, col_dl2, col_dl3, col_dl4 = st.columns(4)
         with col_dl1:
@@ -523,10 +715,21 @@ else:
                 st.error(f"Erro ao ler os polígonos: {e}")
                 st.stop()
 
+        if polygons_file:
+            origins.append(
+                file_origin("Polígonos", polygons_file.name, polygons_file.getvalue())
+            )
         if params_file:
             params_df = load_params(params_file)
+            origins.insert(
+                0,
+                file_origin(
+                    "Parâmetros da rede", params_file.name, params_file.getvalue()
+                ),
+            )
         elif polygons_gdf is not None and not missing_param_columns(polygons_gdf):
             params_df = polygons_to_params(polygons_gdf)
+            origins[0]["entrada"] = "Polígonos e parâmetros (atributos)"
             st.info(
                 "Parâmetros lidos dos atributos dos polígonos; `area` vem da geometria "
                 "quando o atributo falta."
@@ -542,9 +745,15 @@ else:
             st.warning("Carregue os parâmetros (tabela ou polígonos com atributos).")
             st.stop()
 
-    if not (prec_file and etp_file):
-        st.warning("Carregue a precipitação e a ETP para continuar.")
-        st.stop()
+        if not (prec_file and etp_file):
+            st.warning("Carregue a precipitação e a ETP para continuar.")
+            st.stop()
+        prec_df = _load_network_series(prec_file)
+        etp_df = _load_network_series(etp_file)
+        origins += [
+            file_origin("Precipitação", prec_file.name, prec_file.getvalue(), prec_df),
+            file_origin("ETP", etp_file.name, etp_file.getvalue(), etp_df),
+        ]
 
     if "downstream_id" not in params_df.columns:
         st.warning("Coluna `downstream_id` não encontrada nos parâmetros.")
@@ -560,9 +769,6 @@ else:
         .replace(-999, float("nan"))
     )
 
-    prec_df = _load_network_series(prec_file)
-    etp_df = _load_network_series(etp_file)
-
     expected_ids = params_df["id"].astype(int).tolist()
     prec_df = _map_series_columns(prec_df, expected_ids, "precipitação", "prec")
     etp_df = _map_series_columns(etp_df, expected_ids, "ETP", "etp")
@@ -570,6 +776,20 @@ else:
     if set(prec_df.columns) != set(etp_df.columns):
         st.error("Os arquivos de precipitação e ETP devem ter os mesmos IDs de subcatchment após o mapeamento.")
         st.stop()
+
+    common = prec_df.index.intersection(etp_df.index)
+    if common.empty:
+        st.error("A precipitação e a ETP não têm nenhum dia em comum.")
+        st.stop()
+    if len(common) < max(len(prec_df), len(etp_df)):
+        st.warning(
+            "A precipitação e a ETP cobrem períodos diferentes: a simulação usa o "
+            f"trecho comum, de {common[0]:%Y-%m-%d} a {common[-1]:%Y-%m-%d}."
+        )
+        prec_df, etp_df = prec_df.loc[common], etp_df.loc[common]
+
+with st.expander("🔎 Origem dos dados"):
+    _render_origins(origins, "inputs")
 
 st.subheader("Parâmetros dos Subcatchments")
 st.dataframe(params_df, width="stretch")
@@ -630,6 +850,7 @@ if st.button("▶ Executar roteamento", type="primary"):
         st.session_state["network_natural"] = natural_df
         st.session_state["network_params"] = params_df.copy()
         st.session_state["network_method"] = method_label
+        st.session_state["network_origins"] = origins
         st.session_state["network_polygons"] = polygons_gdf
         st.session_state["network_rivers"] = rivers_gdf
 
@@ -656,13 +877,14 @@ if "network_result" in st.session_state:
     natural_display = st.session_state["network_natural"].rename(columns=name_map)
     st.caption(f"Método: {st.session_state.get('network_method', '')}")
 
-    tab_all, tab_out, tab_nat, tab_map, tab_stats, tab_raw = st.tabs([
+    tab_all, tab_out, tab_nat, tab_map, tab_stats, tab_raw, tab_origin = st.tabs([
         "📈 Todos os Subcatchments",
         "🔵 Exutórios",
         "🌱 Natural × Total",
         "🗺️ Mapa",
         "📊 Estatísticas",
         "📋 Dados Brutos",
+        "🔎 Origem dos dados",
     ])
 
     with tab_all:
@@ -778,3 +1000,7 @@ if "network_result" in st.session_state:
             file_name="resultado_rede.csv",
             mime="text/csv",
         )
+
+    with tab_origin:
+        st.caption("Entradas usadas nesta simulação.")
+        _render_origins(st.session_state.get("network_origins", []), "result")
