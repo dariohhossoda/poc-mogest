@@ -297,17 +297,12 @@ def _render_delineation():
         "Postos a montante (opcional): cada um vira o exutório de uma sub-bacia. "
         "Mudar as coordenadas do exutório limpa a tabela."
     )
-    # A new outlet location starts an empty table: the old stations belong to
-    # another basin. Renaming the outlet keeps them.
+    # The table belongs to the outlet location: moving the outlet gives a new key
+    # and an empty table, since the old stations belong to another basin.
+    # Renaming the outlet keeps them; the example outlet comes with its station.
     coords = (outlet.lat, outlet.lon)
-    if st.session_state.setdefault("dl_outlet_coords", coords) != coords:
-        st.session_state["dl_outlet_coords"] = coords
-        st.session_state["dl_stations_run"] = (
-            st.session_state.get("dl_stations_run", 0) + 1
-        )
-    stations_run = st.session_state.get("dl_stations_run", 0)
     stations_df = st.data_editor(
-        _EXAMPLE_STATIONS if stations_run == 0 else _NO_STATIONS,
+        _EXAMPLE_STATIONS if coords == _EXAMPLE_OUTLET[1:] else _NO_STATIONS,
         num_rows="dynamic",
         column_config={
             "id": st.column_config.TextColumn("ID"),
@@ -315,7 +310,7 @@ def _render_delineation():
             "lon": st.column_config.NumberColumn("Longitude", format="%.6f"),
         },
         hide_index=True,
-        key=f"dl_stations_{stations_run}",
+        key=f"dl_stations_{coords[0]}_{coords[1]}",
     )
 
     c_dem, c_res, c_buf = st.columns(3)

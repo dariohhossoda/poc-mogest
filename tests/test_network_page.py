@@ -207,3 +207,9 @@ def test_new_outlet_clears_upstream_stations(monkeypatch):
     assert not at.exception
     _button(at, "🗺️ Delimitar sub-bacias").click().run(timeout=60)
     assert calls[-1] == []
+
+    # back at the example outlet (as after leaving the mode in the browser),
+    # the example station comes back
+    at.number_input(key="dl_lat").set_value(-23.050833).run(timeout=60)
+    _button(at, "🗺️ Delimitar sub-bacias").click().run(timeout=60)
+    assert calls[-1] == ["piracaia_montante"]
