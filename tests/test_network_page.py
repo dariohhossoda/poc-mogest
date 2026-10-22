@@ -179,3 +179,31 @@ def test_delineation_with_nasa_power_offline(monkeypatch):
     assert [o["origem"] for o in origins][1:] == ["NASA POWER", "NASA POWER"]
     assert origins[0]["entrada"] == "Sub-bacias e parâmetros"
     assert origins[2]["produto"].startswith("ETo FAO-56")
+
+
+def test_new_outlet_clears_upstream_stations(monkeypatch):
+    import core.delineation
+
+    calls = []
+
+    def fake(outlet, stations, **kwargs):
+        calls.append([s.id for s in stations])
+        return _fake_delineation()
+
+    monkeypatch.setattr(core.delineation, "delineate", fake)
+
+    at = AppTest.from_file(PAGE).run(timeout=60)
+    at.checkbox(key="use_network_example").uncheck().run(timeout=60)
+    at.radio(key="network_source").set_value("Delimitar a partir de um ponto")
+    at.run(timeout=60)
+
+    # renaming the outlet keeps the example station
+    at.text_input(key="dl_outlet_id").set_value("cachoeira").run(timeout=60)
+    _button(at, "🗺️ Delimitar sub-bacias").click().run(timeout=60)
+    assert calls[-1] == ["piracaia_montante"]
+
+    # moving it clears the table
+    at.number_input(key="dl_lat").set_value(-22.9).run(timeout=60)
+    assert not at.exception
+    _button(at, "🗺️ Delimitar sub-bacias").click().run(timeout=60)
+    assert calls[-1] == []
