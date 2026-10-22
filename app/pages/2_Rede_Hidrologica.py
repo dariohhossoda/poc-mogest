@@ -11,6 +11,7 @@ from app.components.charts import (
     plot_network_hydrograph,
     plot_network_map,
 )
+from core.ana import fetch_inventory, stations_in_bbox
 from core.delineation import (
     DEFAULT_RESOLUTION_DEG,
     TOPOLOGY_COLUMNS,
@@ -131,6 +132,87 @@ def _delineation_points(outlet: Station, stations_df: pd.DataFrame) -> list[Stat
 def _fetch_power(lat, lon, parameters, start, end, time_standard):
     """Public data keyed by the cell centre: shared between sessions, in memory."""
     return fetch_point(lat, lon, parameters, start, end, time_standard)
+
+
+@st.cache_data(ttl=86400, max_entries=1, show_spinner=False)
+def _ana_inventory():
+    """Public ANA inventory, shared between sessions, in memory (~6 MB)."""
+    return fetch_inventory()
+
+
+def _clicked_ana(selection, stations: pd.DataFrame):
+    """Row of the ANA station clicked on the delineation map, or None."""
+    for point in (selection or {}).get("selection", {}).get("points", []):
+        data = point.get("customdata")
+        if isinstance(data, list) and len(data) > 1 and data[0] == "ana":
+            match = stations[stations["codigo"] == data[1]]
+            if len(match):
+                return match.iloc[0]
+    return None
+
+
+def _use_as_outlet(code: str, lat: float, lon: float):
+    st.session_state["dl_outlet_id"] = code
+    st.session_state["dl_lat"] = lat
+    st.session_state["dl_lon"] = lon
+
+
+def _add_station(code: str, lat: float, lon: float):
+    """Append a row to the stations table, keeping the edits made so far."""
+    coords, version, _ = st.session_state["dl_stations_base"]
+    current = st.session_state.get("dl_stations_last", _NO_STATIONS)
+    row = pd.DataFrame({"id": [code], "lat": [lat], "lon": [lon]})
+    st.session_state["dl_stations_base"] = (
+        coords,
+        version + 1,
+        pd.concat([current, row], ignore_index=True),
+    )
+
+
+def _render_ana_choice(ana: pd.DataFrame, points_df: pd.DataFrame):
+    """Caption of the ANA layer and, once a station is clicked, what to do with it."""
+    station = _clicked_ana(st.session_state.get("delineation_map"), ana)
+    if station is None:
+        st.caption(
+            f"{len(ana)} postos da ANA na janela (azul: em operação; cinza: "
+            "desativado). Clique em um para usá-lo como exutório ou posto a "
+            "montante. Escolha o exutório primeiro: mudá-lo limpa os postos."
+        )
+        return
+    area = (
+        "sem área" if pd.isna(station["area_km2"])
+        else f"área {station['area_km2']:,.0f} km²"
+    )
+    status = "em operação" if station["operando"] else "desativado"
+    st.markdown(
+        f"**{station['codigo']}** {station['nome']} · {station['rio']} · "
+        f"{area} · {station['responsavel']} · {status} · "
+        f"{station['lat']:.4f}, {station['lon']:.4f}"
+    )
+    if station["casas_coord"] < 2:
+        st.warning(
+            f"A coordenada deste posto tem só {station['casas_coord']} casa(s) "
+            "decimal(is) no inventário: confira antes de usar."
+        )
+    code, lat, lon = station["codigo"], float(station["lat"]), float(station["lon"])
+    taken = code in set(points_df["id"].astype(str))
+    b_outlet, b_station = st.columns(2)
+    b_outlet.button(
+        "📍 Usar como exutório",
+        on_click=_use_as_outlet,
+        args=(code, lat, lon),
+        disabled=taken,
+        key="dl_ana_outlet",
+    )
+    b_station.button(
+        "➕ Adicionar aos postos a montante",
+        on_click=_add_station,
+        args=(code, lat, lon),
+        disabled=taken,
+        key="dl_ana_station",
+    )
+    if taken:
+        st.caption("Este posto já está entre os pontos informados.")
 
 
 def _power_series(kind: str, label: str, polygons, names: dict):
@@ -300,9 +382,20 @@ def _render_delineation():
     # The table belongs to the outlet location: moving the outlet gives a new key
     # and an empty table, since the old stations belong to another basin.
     # Renaming the outlet keeps them; the example outlet comes with its station.
+    # A station added from the ANA map bumps the version: new key, same rows plus
+    # the new one.
     coords = (outlet.lat, outlet.lon)
+    base = st.session_state.get("dl_stations_base")
+    if base is None or base[0] != coords:
+        base = (
+            coords,
+            0,
+            _EXAMPLE_STATIONS if coords == _EXAMPLE_OUTLET[1:] else _NO_STATIONS,
+        )
+        st.session_state["dl_stations_base"] = base
+    _, version, initial = base
     stations_df = st.data_editor(
-        _EXAMPLE_STATIONS if coords == _EXAMPLE_OUTLET[1:] else _NO_STATIONS,
+        initial,
         num_rows="dynamic",
         column_config={
             "id": st.column_config.TextColumn("ID"),
@@ -310,8 +403,9 @@ def _render_delineation():
             "lon": st.column_config.NumberColumn("Longitude", format="%.6f"),
         },
         hide_index=True,
-        key=f"dl_stations_{coords[0]}_{coords[1]}",
+        key=f"dl_stations_{coords[0]}_{coords[1]}_{version}",
     )
+    st.session_state["dl_stations_last"] = stations_df
 
     c_dem, c_res, c_buf = st.columns(3)
     dem_source = c_dem.radio("DEM", [_GLO30, "GeoTIFF próprio"], key="dl_dem_source")
@@ -433,20 +527,45 @@ def _render_delineation():
     current = (
         result is not None and st.session_state.get("delineation_inputs") == inputs
     )
-    basemap = BASEMAPS[st.selectbox("Fundo", list(BASEMAPS), key="dl_basemap")]
+    c_base, c_ana = st.columns([2, 3], vertical_alignment="bottom")
+    basemap = BASEMAPS[c_base.selectbox("Fundo", list(BASEMAPS), key="dl_basemap")]
+    show_ana = c_ana.checkbox(
+        "Mostrar postos fluviométricos da ANA",
+        key="dl_ana",
+        help="Postos de cota ou vazão do inventário Hidroweb na janela do mapa; "
+        "clique em um para usá-lo. A primeira consulta do dia baixa o "
+        "inventário do Brasil (cerca de 60 MB, alguns segundos).",
+    )
     window = points_bbox(points, buffer_km) if glo30 else None
+    view = result.bbox if current else window
+    ana = None
+    if show_ana:
+        try:
+            with st.spinner("Baixando o inventário de postos da ANA…"):
+                inventory = _ana_inventory()
+        except RuntimeError as e:
+            st.error(str(e))
+        else:
+            ana = stations_in_bbox(
+                inventory, view or points_bbox(points, buffer_km)
+            )
     st.plotly_chart(
         plot_delineation_preview(
             points_df,
-            bbox=result.bbox if current else window,
+            bbox=view,
             polygons=result.polygons if current else None,
             rivers=result.rivers if current else None,
             snapped=result.outlets[result.outlets["posto"]] if current else None,
             basemap=basemap,
+            ana=ana,
         ),
         width="stretch",
         key="delineation_map",
+        on_select="rerun",
+        selection_mode="points",
     )
+    if ana is not None:
+        _render_ana_choice(ana, points_df)
     if result is None:
         st.info("Ajuste os pontos e clique em **Delimitar sub-bacias**.")
         st.stop()
