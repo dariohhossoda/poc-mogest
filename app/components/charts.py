@@ -161,13 +161,16 @@ def plot_delineation_preview(
     rivers=None,
     snapped=None,
     basemap: str = "carto-positron",
+    ana: pd.DataFrame | None = None,
 ) -> go.Figure:
     """
     Map of the delineation inputs and, once it ran, its result.
 
     ``points`` has id, lat, lon and kind ("Exutório" or "Posto"); ``bbox`` is
     the GLO-30 window (west, south, east, north). ``polygons``, ``rivers`` and
-    ``snapped`` (outlets moved to the river) are WGS84 GeoDataFrames.
+    ``snapped`` (outlets moved to the river) are WGS84 GeoDataFrames. ``ana``
+    holds ANA stations (``core.ana`` columns), drawn as clickable markers whose
+    customdata starts with ``"ana"`` and the station code.
     """
     dark = basemap == "carto-darkmatter"
     edge = "#e0e0e0" if dark else "#404040"
@@ -208,8 +211,11 @@ def plot_delineation_preview(
             customdata=snapped["dist_snap_m"],
             hovertemplate="<b>%{text}</b> no rio<br>deslocado %{customdata:.0f} m"
             "<extra></extra>",
+            unselected=dict(marker=dict(opacity=1)),
             name="Ponto no rio",
         ))
+    if ana is not None and len(ana):
+        fig.add_trace(_ana_trace(ana))
     if len(points):
         is_outlet = points["kind"].eq("Exutório").tolist()
         fig.add_trace(go.Scattermap(
@@ -222,6 +228,7 @@ def plot_delineation_preview(
             text=points["id"],
             customdata=points["kind"],
             hovertemplate="<b>%{text}</b> (%{customdata})<extra></extra>",
+            unselected=dict(marker=dict(opacity=1)),
             name="Pontos informados",
         ))
 
@@ -243,6 +250,37 @@ def plot_delineation_preview(
         showlegend=False,
     )
     return fig
+
+
+_ANA_OPEN = "#1f77b4"
+_ANA_CLOSED = "#9e9e9e"
+
+
+def _ana_trace(ana: pd.DataFrame) -> go.Scattermap:
+    """ANA stations: blue in operation, grey closed; a click selects one."""
+    area = ana["area_km2"].map(lambda a: "—" if pd.isna(a) else f"{a:,.0f} km²")
+    status = ana["operando"].map({True: "em operação", False: "desativado"})
+    coord = ana["casas_coord"].map(
+        lambda n: "" if n >= 2 else f"<br>coordenada com {n} casa(s) decimal(is)"
+    )
+    return go.Scattermap(
+        lon=ana["lon"], lat=ana["lat"],
+        mode="markers",
+        marker=dict(
+            size=9,
+            color=[_ANA_OPEN if o else _ANA_CLOSED for o in ana["operando"]],
+        ),
+        selected=dict(marker=dict(size=15)),
+        unselected=dict(marker=dict(opacity=1)),
+        customdata=list(zip(
+            ["ana"] * len(ana), ana["codigo"], ana["nome"], ana["rio"], area,
+            ana["responsavel"], status, coord,
+        )),
+        hovertemplate="<b>%{customdata[1]}</b> %{customdata[2]}<br>"
+        "%{customdata[3]} · área %{customdata[4]}<br>"
+        "%{customdata[5]} · %{customdata[6]}%{customdata[7]}<extra>ANA</extra>",
+        name="Postos ANA",
+    )
 
 
 def _map_view(gdf) -> dict:

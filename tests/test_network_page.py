@@ -217,3 +217,63 @@ def test_new_outlet_clears_upstream_stations(monkeypatch):
     at.number_input(key="dl_lat").set_value(-23.050833).run(timeout=60)
     _button(at, "🗺️ Delimitar sub-bacias").click().run(timeout=60)
     assert calls[-1] == ["piracaia_montante"]
+
+
+def _fake_inventory(*_args, **_kwargs):
+    return pd.DataFrame(
+        {
+            "codigo": ["62666010", "62664500", "99999999"],
+            "nome": ["SB-CA-BRC Barragem Cachoeira", "CACHOEIRA MONTANTE", "LONGE"],
+            "rio": ["RIO DA CACHOEIRA"] * 2 + ["OUTRO"],
+            "municipio": ["PIRACAIA"] * 3,
+            "estado": ["SÃO PAULO"] * 3,
+            "responsavel": ["SABESP", "SPÁGUAS-SP", "ANA"],
+            "operadora": ["SABESP", "SPÁGUAS-SP", "ANA"],
+            "area_km2": [392.0, float("nan"), 10.0],
+            "lat": [-23.0508, -23.0064, -10.0],
+            "lon": [-46.3192, -46.2397, -50.0],
+            "casas_coord": [4, 4, 1],
+            "operando": [True, True, False],
+        }
+    )
+
+
+def _click_ana(at: AppTest, code: str):
+    at.session_state["delineation_map"] = {
+        "selection": {"points": [{"customdata": ["ana", code]}]}
+    }
+    return at.run(timeout=60)
+
+
+def test_ana_station_as_outlet_and_upstream(monkeypatch):
+    import streamlit as st
+
+    import core.ana
+
+    st.cache_data.clear()
+    monkeypatch.setattr(core.ana, "fetch_inventory", _fake_inventory)
+
+    at = AppTest.from_file(PAGE).run(timeout=60)
+    at.checkbox(key="use_network_example").uncheck().run(timeout=60)
+    at.radio(key="network_source").set_value("Delimitar a partir de um ponto")
+    at.run(timeout=60)
+    at.checkbox(key="dl_ana").check().run(timeout=60)
+    assert not at.exception
+    # only the two stations inside the window
+    assert any("2 postos da ANA na janela" in c.value for c in at.caption)
+
+    _click_ana(at, "62666010")
+    at.button(key="dl_ana_outlet").click().run(timeout=60)
+    assert not at.exception
+    assert at.text_input(key="dl_outlet_id").value == "62666010"
+    assert at.number_input(key="dl_lat").value == pytest.approx(-23.0508)
+
+    _click_ana(at, "62664500")
+    at.button(key="dl_ana_station").click().run(timeout=60)
+    assert not at.exception
+    stations = at.session_state["dl_stations_last"]
+    # the new outlet cleared the example station; the ANA one was added
+    assert stations["id"].tolist() == ["62664500"]
+    # clicking it again: it is already a point, so both buttons are off
+    _click_ana(at, "62664500")
+    assert at.button(key="dl_ana_station").disabled
