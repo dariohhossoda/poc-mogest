@@ -623,13 +623,15 @@ if use_example:
         example_origin("ETP", ETP_PATH, etp_df),
     ]
     st.info("Usando rede de exemplo com 2 subcatchments.")
+    from_delineation = False
 else:
     rivers_gdf = None
     origins = []
     source = st.radio(
         "Origem das sub-bacias", _SOURCES, horizontal=True, key="network_source"
     )
-    if source == _SOURCES[1]:
+    from_delineation = source == _SOURCES[1]
+    if from_delineation:
         params_df, polygons_gdf, rivers_gdf, network_origin = _render_delineation()
         st.subheader("Precipitação e ETP")
         st.caption(
@@ -791,8 +793,10 @@ else:
 with st.expander("🔎 Origem dos dados"):
     _render_origins(origins, "inputs")
 
-st.subheader("Parâmetros dos Subcatchments")
-st.dataframe(params_df, width="stretch")
+# The delineation already shows the parameters, in its editable table
+if not from_delineation:
+    st.subheader("Parâmetros dos Subcatchments")
+    st.dataframe(params_df, width="stretch")
 
 _tuin = pd.to_numeric(params_df.get("tuin"), errors="coerce")
 if _tuin is not None and (_tuin > 0).any() and (_tuin <= 1).all():
