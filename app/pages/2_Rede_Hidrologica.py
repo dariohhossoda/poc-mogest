@@ -58,6 +58,7 @@ _EXAMPLE_OUTLET = ("barragem_cachoeira", -23.050833, -46.319278)
 _EXAMPLE_STATIONS = pd.DataFrame(
     {"id": ["piracaia_montante"], "lat": [-23.0062], "lon": [-46.2395]}
 )
+_NO_STATIONS = _EXAMPLE_STATIONS.iloc[0:0]
 
 _SERIES_SOURCES = ("Enviar arquivo", "NASA POWER")
 _POWER_START = dt.date(2016, 1, 1)
@@ -293,10 +294,15 @@ def _render_delineation():
         ),
     )
     st.caption(
-        "Postos a montante (opcional): cada um vira o exutório de uma sub-bacia."
+        "Postos a montante (opcional): cada um vira o exutório de uma sub-bacia. "
+        "Mudar as coordenadas do exutório limpa a tabela."
     )
+    # The table belongs to the outlet location: moving the outlet gives a new key
+    # and an empty table, since the old stations belong to another basin.
+    # Renaming the outlet keeps them; the example outlet comes with its station.
+    coords = (outlet.lat, outlet.lon)
     stations_df = st.data_editor(
-        _EXAMPLE_STATIONS,
+        _EXAMPLE_STATIONS if coords == _EXAMPLE_OUTLET[1:] else _NO_STATIONS,
         num_rows="dynamic",
         column_config={
             "id": st.column_config.TextColumn("ID"),
@@ -304,7 +310,7 @@ def _render_delineation():
             "lon": st.column_config.NumberColumn("Longitude", format="%.6f"),
         },
         hide_index=True,
-        key="dl_stations",
+        key=f"dl_stations_{coords[0]}_{coords[1]}",
     )
 
     c_dem, c_res, c_buf = st.columns(3)
