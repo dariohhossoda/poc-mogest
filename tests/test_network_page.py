@@ -9,6 +9,7 @@ from streamlit.testing.v1 import AppTest
 ROOT = Path(__file__).parent.parent
 PAGE = str(ROOT / "app" / "pages" / "2_Rede_Hidrologica.py")
 SKIP = {".venv", ".git", "__pycache__", ".pytest_cache", ".ruff_cache"}
+_PARAMS_TABLE = "Parâmetros dos Subcatchments"
 
 
 def _files(root: Path) -> set:
@@ -26,6 +27,7 @@ def _button(at: AppTest, label: str):
 def test_example_network_runs():
     at = AppTest.from_file(PAGE).run(timeout=60)
     assert not at.exception
+    assert _PARAMS_TABLE in [h.value for h in at.subheader]
     _button(at, "▶ Executar roteamento").click().run(timeout=60)
     assert not at.exception
     assert "network_result" in at.session_state
@@ -171,6 +173,8 @@ def test_delineation_with_nasa_power_offline(monkeypatch):
     assert not at.exception
     assert not at.error
     assert any("Período com dado" in w.value for w in at.warning)
+    # the delineation already shows the parameters
+    assert _PARAMS_TABLE not in [h.value for h in at.subheader]
 
     _button(at, "▶ Executar roteamento").click().run(timeout=60)
     assert not at.exception
