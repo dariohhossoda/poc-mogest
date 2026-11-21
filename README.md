@@ -78,9 +78,16 @@ A simulação começa no primeiro dia da precipitação e da ETP, e o trecho ant
 de calibração serve de aquecimento. Os dias observados fora do período de calibração
 formam a validação. O resultado traz KGE e NSE de calibração e validação por posto, o
 hidrograma observado × simulado e a tabela de parâmetros calibrados (CSV no formato do
-template), usada na simulação enquanto a opção estiver marcada; a vazão observada e a
-calibração entram na **Origem dos dados**. `k`, `x` e os parâmetros do trecho não são
-calibrados.
+template). **Aplicar à tabela de parâmetros** grava os valores calibrados na tabela de
+parâmetros da página (no modo delimitação, na tabela editável), que é o que a simulação
+usa; **Voltar aos parâmetros de entrada** desfaz. A calibração entra na **Origem dos
+dados** enquanto os valores estiverem aplicados. `k`, `x` e os parâmetros do trecho não
+são calibrados.
+
+A vazão observada enviada nessa seção, mesmo sem calibrar, aparece pontilhada, na cor da
+sub-bacia, nos hidrogramas dos resultados (todas as sub-bacias, exutórios, natural ×
+total e mapa) e nos dados brutos, e entra na **Origem dos dados**. A opção **Mostrar a
+vazão observada nos gráficos** a esconde.
 
 ## Delimitação a partir de um ponto
 
