@@ -115,4 +115,6 @@
 - [x] `core/calibration.py`: grupos por posto, de montante para jusante, `external_inflows` do `run_network`, herança abaixo dos postos, evolução diferencial com KGE
 - [x] seção Calibração na página Rede: vazão observada (colunas por `id` ou `name`), parâmetros, período de calibração, modo rápido/completo, estimativa de tempo e barra de progresso por geração
 - [x] resultado: KGE/NSE de calibração e validação por posto, hidrograma observado × simulado, tabela calibrada usada na simulação e em CSV, entrada na Origem dos dados
+- [x] aplicar os valores calibrados à tabela de parâmetros (e voltar aos de entrada), no lugar da opção "Simular com os parâmetros calibrados"
+- [x] vazão observada nos hidrogramas dos resultados e nos dados brutos
 - [ ] fase 2: vazão observada da ANA (`HidroSerieHistorica`)
