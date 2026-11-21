@@ -1,4 +1,5 @@
 import datetime as dt
+import json
 import time
 from pathlib import Path
 
@@ -600,11 +601,14 @@ def _render_delineation():
         "Parâmetros iniciais: a topologia vem do DEM (só leitura); os parâmetros "
         "SMAP e de propagação podem ser editados."
     )
+    applied = _applied_params(("delineation", st.session_state["delineation_run"]))
+    _render_applied_notice(applied)
     params = st.data_editor(
-        result.params,
+        result.params if applied is None else applied["params"],
         disabled=list(TOPOLOGY_COLUMNS),
         hide_index=True,
-        key=f"dl_params_{st.session_state['delineation_run']}",
+        key=f"dl_params_{st.session_state['delineation_run']}_"
+        f"{st.session_state.get('params_applied_version', 0)}",
     )
     d1, d2 = st.columns(2)
     d1.download_button(
@@ -666,7 +670,9 @@ def _clicked_basin(selection, ids: list):
     return None
 
 
-def _render_map_tab(gdf, total, natural, params, name_map, outlet_ids, rivers=None):
+def _render_map_tab(
+    gdf, total, natural, params, name_map, outlet_ids, rivers=None, observed=None
+):
     if gdf is None:
         st.info(
             "Carregue os polígonos das sub-bacias (GeoJSON, shapefile .zip ou "
@@ -728,9 +734,13 @@ def _render_map_tab(gdf, total, natural, params, name_map, outlet_ids, rivers=No
         basin = st.selectbox(
             "Sub-bacia", ids, format_func=lambda i: labels[i], key="map_basin"
         )
+        obs = None
+        if observed is not None and basin in observed.columns:
+            obs = observed[[basin]].rename(columns={basin: "Observada"})
         fig = plot_network_hydrograph(
             pd.DataFrame({"Natural": natural[basin], "Total": total[basin]}),
             title=labels[basin],
+            observed=obs,
         )
         fig.for_each_trace(
             lambda t: t.update(name=t.name.removeprefix("Subcatchment "))
@@ -749,6 +759,18 @@ _CAL_OVERHEAD = 1.3
 _IGNORE = "(ignorar)"
 
 
+def _comparable(params_df: pd.DataFrame) -> pd.DataFrame:
+    """Parameters as text, numbers as floats: the editor may turn 1 into 1.0."""
+    out = {}
+    for col in params_df.columns:
+        values = params_df[col]
+        numbers = pd.to_numeric(values, errors="coerce")
+        if numbers.notna().sum() == values.notna().sum():
+            values = numbers.astype(float).round(8)
+        out[str(col)] = values.astype(str)
+    return pd.DataFrame(out).reset_index(drop=True)
+
+
 def _inputs_signature(params_df, prec_df, etp_df, method) -> tuple:
     """Changes whenever an input of the calibration changes."""
 
@@ -757,11 +779,62 @@ def _inputs_signature(params_df, prec_df, etp_df, method) -> tuple:
 
     return (
         tuple(map(str, params_df.columns)),
-        digest(params_df.astype(str)),
+        digest(_comparable(params_df)),
         digest(prec_df),
         digest(etp_df),
         method,
     )
+
+
+def _applied_params(source) -> dict | None:
+    """Parameters written to the table of this input source, or None."""
+    applied = st.session_state.get("params_applied")
+    return applied if applied is not None and applied["source"] == source else None
+
+
+def _set_table(source, kind: str, params: pd.DataFrame, stored: dict):
+    """Write calibrated (or back the input) parameters to the parameters table."""
+    st.session_state["params_applied"] = {
+        "source": source,
+        "kind": kind,
+        "params": params.copy(),
+        "columns": stored["columns"],
+        "origins": stored["origins"],
+        "calibration_id": stored["id"],
+        "stored": stored,
+    }
+    st.session_state["params_applied_version"] = (
+        st.session_state.get("params_applied_version", 0) + 1
+    )
+    st.session_state.pop("network_result", None)
+
+
+def _render_applied_notice(applied: dict | None):
+    """Note above the parameters table while it holds calibrated values."""
+    if applied is None or applied["kind"] != "calibrated":
+        return
+    stored = applied["stored"]
+    c_note, c_back = st.columns([3, 1], vertical_alignment="center")
+    c_note.info(
+        "A tabela tem os valores calibrados de "
+        f"{', '.join(CALIBRATABLE[c] for c in applied['columns'])}."
+    )
+    c_back.button(
+        "↩️ Voltar aos parâmetros de entrada",
+        on_click=_set_table,
+        args=(applied["source"], "input", stored["input_params"], stored),
+        key="params_revert",
+    )
+
+
+def _unique(origins: list[dict]) -> list[dict]:
+    seen, out = set(), []
+    for origin in origins:
+        key = json.dumps(origin, sort_keys=True, default=str)
+        if key not in seen:
+            seen.add(key)
+            out.append(origin)
+    return out
 
 
 def _simulation_seconds(signature, params_df, prec_df, etp_df, method) -> float:
@@ -845,7 +918,7 @@ def _calibration_origin(result, columns, period, mode, method_label) -> dict:
     }
 
 
-def _render_calibration_result(stored: dict, names: dict):
+def _render_calibration_result(stored: dict, names: dict, source):
     result = stored["result"]
     label = lambda i: str(names.get(i, i))  # noqa: E731
     st.markdown("**Resultado da calibração**")
@@ -900,26 +973,43 @@ def _render_calibration_result(stored: dict, names: dict):
             annotation_position="top left",
         )
         st.plotly_chart(fig, width="stretch")
-    if "use_calibrated" not in st.session_state:
-        st.session_state["use_calibrated"] = True
-    return st.checkbox(
-        "Simular com os parâmetros calibrados",
-        key="use_calibrated",
-        help="Desmarque para voltar aos parâmetros de entrada.",
+    applied = _applied_params(source)
+    if (
+        applied is not None
+        and applied["kind"] == "calibrated"
+        and applied["calibration_id"] == stored["id"]
+    ):
+        st.success(
+            "Valores calibrados aplicados à tabela de parâmetros: a simulação usa "
+            "esses valores."
+        )
+        return
+    st.button(
+        "✅ Aplicar à tabela de parâmetros",
+        type="primary",
+        on_click=_set_table,
+        args=(source, "calibrated", result.params, stored),
+        key="params_apply",
+    )
+    st.caption(
+        "A simulação usa a tabela de parâmetros: aplique os valores calibrados para "
+        "simular com eles. Dá para voltar aos parâmetros de entrada depois."
     )
 
 
-def _render_calibration(params_df, prec_df, etp_df, method, method_label, names):
+def _render_calibration(
+    params_df, prec_df, etp_df, method, method_label, names, source
+):
     """
-    Calibration of the SMAP parameters against observed discharge.
+    Observed discharge and calibration of the SMAP parameters against it.
 
-    Returns (params, origins): the calibrated parameters and the origins of the
-    observed series and of the calibration while the user keeps them on; the
-    input parameters and no origin otherwise.
+    ``source`` identifies the input of the parameters table, where the
+    calibrated values can be written. Returns (observed, origin) of the observed
+    discharge on the forcing index, or (None, None) while there is none.
     """
     signature = _inputs_signature(params_df, prec_df, etp_df, method)
     stored = st.session_state.get("network_calibration")
-    if stored is not None and stored["signature"] != signature:
+    if stored is not None and signature not in stored["signatures"]:
         stored = None
     st.subheader("🎯 Calibração")
     with st.expander(
@@ -948,10 +1038,17 @@ def _render_calibration(params_df, prec_df, etp_df, method, method_label, names)
         obs_file = c_up.file_uploader(
             "Vazão observada (m³/s)", type=["csv", "xlsx"], key="obs_upload"
         )
-        observed = None
+        observed = obs_origin = None
         if obs_file is not None:
             observed = _observed_input(params_df, prec_df, names, obs_file)
-        elif stored is None:
+        if observed is not None:
+            obs_origin = file_origin(
+                "Vazão observada",
+                obs_file.name,
+                obs_file.getvalue(),
+                observed.dropna(how="all"),
+            )
+        elif obs_file is None and stored is None:
             st.info("Envie a vazão observada para calibrar.")
 
         if observed is not None:
@@ -1068,33 +1165,29 @@ def _render_calibration(params_df, prec_df, etp_df, method, method_label, names)
                         f"{_duration(time.perf_counter() - began)}.",
                     )
                     period = (cal_start, cal_end)
+                    calibrated_signature = _inputs_signature(
+                        result.params, prec_df, etp_df, method
+                    )
                     stored = {
-                        "signature": signature,
+                        "id": st.session_state.get("calibration_count", 0) + 1,
+                        "signatures": {signature, calibrated_signature},
+                        "input_params": params_df.copy(),
                         "result": result,
                         "columns": columns,
                         "period": period,
                         "origins": [
-                            file_origin(
-                                "Vazão observada",
-                                obs_file.name,
-                                obs_file.getvalue(),
-                                observed.dropna(how="all"),
-                            ),
+                            obs_origin,
                             _calibration_origin(
                                 result, columns, period, mode, method_label
                             ),
                         ],
                     }
+                    st.session_state["calibration_count"] = stored["id"]
                     st.session_state["network_calibration"] = stored
-                    st.session_state["use_calibrated"] = True
-                    st.session_state.pop("network_result", None)
 
-        if stored is None:
-            return params_df, []
-        if _render_calibration_result(stored, names):
-            st.caption("A simulação abaixo usa os parâmetros calibrados.")
-            return stored["result"].params, stored["origins"]
-        return params_df, []
+        if stored is not None:
+            _render_calibration_result(stored, names, source)
+    return observed, obs_origin
 
 
 # --- Checkbox first; uploaders only shown when example is OFF ---
@@ -1117,6 +1210,7 @@ if use_example:
     ]
     st.info("Usando rede de exemplo com 2 subcatchments.")
     from_delineation = False
+    params_source = ("example",)
 else:
     rivers_gdf = None
     origins = []
@@ -1125,6 +1219,7 @@ else:
     )
     from_delineation = source == _SOURCES[1]
     if from_delineation:
+        params_source = ("delineation", st.session_state.get("delineation_run"))
         params_df, polygons_gdf, rivers_gdf, network_origin = _render_delineation()
         st.subheader("Precipitação e ETP")
         st.caption(
@@ -1240,6 +1335,11 @@ else:
             st.warning("Carregue os parâmetros (tabela ou polígonos com atributos).")
             st.stop()
 
+        params_source = (
+            "upload",
+            params_file.file_id if params_file else None,
+            polygons_file.file_id if polygons_file else None,
+        )
         if not (prec_file and etp_file):
             st.warning("Carregue a precipitação e a ETP para continuar.")
             st.stop()
@@ -1283,12 +1383,21 @@ else:
         )
         prec_df, etp_df = prec_df.loc[common], etp_df.loc[common]
 
+# Calibrated values written to the parameters table (the delineation applies
+# them in its own editable table)
+_applied = _applied_params(params_source)
+if _applied is not None and not from_delineation:
+    params_df = _applied["params"].copy()
+if _applied is not None and _applied["kind"] == "calibrated":
+    origins = _unique([*origins, *_applied["origins"]])
+
 with st.expander("🔎 Origem dos dados"):
     _render_origins(origins, "inputs")
 
 # The delineation already shows the parameters, in its editable table
 if not from_delineation:
     st.subheader("Parâmetros dos Subcatchments")
+    _render_applied_notice(_applied)
     st.dataframe(params_df, width="stretch")
 
 _tuin = pd.to_numeric(params_df.get("tuin"), errors="coerce")
@@ -1334,10 +1443,17 @@ if set(st.session_state.get("basin_names", {}).keys()) != set(basin_ids):
         bid: str(_names_source.get(bid, bid)) for bid in basin_ids
     }
 
-params_df, _calibration_origins = _render_calibration(
-    params_df, prec_df, etp_df, method, method_label, st.session_state["basin_names"]
+observed_df, _observed_origin = _render_calibration(
+    params_df,
+    prec_df,
+    etp_df,
+    method,
+    method_label,
+    st.session_state["basin_names"],
+    params_source,
 )
-origins = [*origins, *_calibration_origins]
+if _observed_origin is not None:
+    origins = _unique([*origins, _observed_origin])
 
 st.subheader("Simulação")
 if st.button("▶ Executar roteamento", type="primary"):
@@ -1356,6 +1472,7 @@ if st.button("▶ Executar roteamento", type="primary"):
         st.session_state["network_origins"] = origins
         st.session_state["network_polygons"] = polygons_gdf
         st.session_state["network_rivers"] = rivers_gdf
+        st.session_state["network_observed"] = observed_df
 
 if "network_result" in st.session_state:
     result_df = st.session_state["network_result"]
@@ -1379,6 +1496,31 @@ if "network_result" in st.session_state:
 
     natural_display = st.session_state["network_natural"].rename(columns=name_map)
     st.caption(f"Método: {st.session_state.get('network_method', '')}")
+
+    # Observed discharge sent in the calibration section, by subcatchment id
+    observed_ids = st.session_state.get("network_observed")
+    observed_all = observed_plot = None
+    if observed_ids is not None:
+        observed_ids = observed_ids.reindex(result_df.index)
+        observed_all = observed_ids.rename(columns=name_map)
+        if st.checkbox(
+            "Mostrar a vazão observada nos gráficos", value=True, key="show_observed"
+        ):
+            observed_plot = observed_all
+        else:
+            observed_ids = None
+
+    def _observed_of(cols) -> pd.DataFrame | None:
+        """Observed columns among ``cols`` (display names), or None."""
+        if observed_plot is None:
+            return None
+        keep = [c for c in cols if c in observed_plot.columns]
+        return observed_plot[keep] if keep else None
+
+    def _observed_single(col) -> pd.DataFrame | None:
+        """Observed discharge of one subcatchment as an "Observada" column."""
+        obs = _observed_of([col])
+        return None if obs is None else obs.rename(columns={col: "Observada"})
 
     tab_all, tab_out, tab_nat, tab_map, tab_stats, tab_raw, tab_origin = st.tabs([
         "📈 Todos os Subcatchments",
@@ -1414,7 +1556,11 @@ if "network_result" in st.session_state:
                             f"Bacia {col}", value=default, key=f"color_all_{col}"
                         )
         st.plotly_chart(
-            plot_network_hydrograph(display_df, colors=colors_all),
+            plot_network_hydrograph(
+                display_df,
+                colors=colors_all,
+                observed=_observed_of(display_df.columns),
+            ),
             width="stretch",
         )
 
@@ -1434,6 +1580,7 @@ if "network_result" in st.session_state:
                     display_df[outlet_cols],
                     title="Hidrogramas dos Exutórios",
                     colors=colors_out,
+                    observed=_observed_of(outlet_cols),
                 ),
                 width="stretch",
             )
@@ -1452,6 +1599,7 @@ if "network_result" in st.session_state:
                 "Total": display_df[nat_col],
             }),
             title=f"Vazão natural e total — {nat_col}",
+            observed=_observed_single(nat_col),
         )
         fig_nat.for_each_trace(
             lambda t: t.update(name=t.name.removeprefix("Subcatchment "))
@@ -1467,6 +1615,7 @@ if "network_result" in st.session_state:
             name_map,
             outlet_ids,
             rivers=st.session_state.get("network_rivers"),
+            observed=observed_ids,
         )
 
     with tab_stats:
@@ -1492,9 +1641,10 @@ if "network_result" in st.session_state:
         )
 
     with tab_raw:
-        raw_df = pd.concat(
-            {"total": display_df, "natural": natural_display}, axis=1
-        ).round(4)
+        raw_parts = {"total": display_df, "natural": natural_display}
+        if observed_all is not None:
+            raw_parts["observada"] = observed_all
+        raw_df = pd.concat(raw_parts, axis=1).round(4)
         raw_df.columns = [f"{name}_{kind}" for kind, name in raw_df.columns]
         st.dataframe(raw_df, width="stretch")
         st.download_button(

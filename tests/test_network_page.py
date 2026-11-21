@@ -1,10 +1,13 @@
 import datetime as dt
+import io
 import tempfile
 from pathlib import Path
 
 import pandas as pd
 import pytest
 from streamlit.testing.v1 import AppTest
+
+from core.io import load_timeseries
 
 ROOT = Path(__file__).parent.parent
 PAGE = str(ROOT / "app" / "pages" / "2_Rede_Hidrologica.py")
@@ -281,7 +284,7 @@ def test_ana_station_as_outlet_and_upstream(monkeypatch):
 
 def _observed_example_csv(column: str) -> bytes:
     """Discharge at subcatchment 1 of the example, with another ``str``."""
-    from core.io import load_params, load_timeseries
+    from core.io import load_params
     from core.models import run_network_simulation
 
     def series(name):
@@ -297,7 +300,12 @@ def _observed_example_csv(column: str) -> bytes:
     return total[[1]].rename(columns={1: column}).to_csv().encode()
 
 
-def test_calibration_feeds_the_simulation():
+def _charts_with(at: AppTest, text: str) -> int:
+    """Number of plotly charts with a trace whose name starts with ``text``."""
+    return sum(f'"name":"{text}' in c.proto.spec for c in at.get("plotly_chart"))
+
+
+def test_calibrated_values_go_to_the_parameters_table():
     at = AppTest.from_file(PAGE).run(timeout=60)
     at.file_uploader(key="obs_upload").set_value(
         ("vazao.csv", _observed_example_csv("1"), "text/csv")
@@ -317,18 +325,42 @@ def test_calibration_feeds_the_simulation():
     calibrated = stored["result"].params
     assert calibrated["str"].nunique() == 1  # one group: both subcatchments share it
 
-    _button(at, "▶ Executar roteamento").click().run(timeout=60)
-    assert not at.exception
-    pd.testing.assert_frame_equal(at.session_state["network_params"], calibrated)
-    origins = at.session_state["network_origins"]
-    assert [o["entrada"] for o in origins][-2:] == [
-        "Vazão observada",
-        "Parâmetros calibrados",
-    ]
-
-    at.checkbox(key="use_calibrated").uncheck().run(timeout=60)
+    # Not applied yet: the simulation uses the table, with the observed series
     _button(at, "▶ Executar roteamento").click().run(timeout=60)
     assert (at.session_state["network_params"]["str"] == 100.0).all()
+    assert list(at.session_state["network_observed"].columns) == [1]
+    assert _charts_with(at, "Observada") >= 3  # all, outlets, natural × total
+    entries = [o["entrada"] for o in at.session_state["network_origins"]]
+    assert "Vazão observada" in entries
+    assert "Parâmetros calibrados" not in entries
+
+    # Applied: the parameters table holds the calibrated values
+    at.button(key="params_apply").click().run(timeout=60)
+    assert not at.exception
+    assert "network_result" not in at.session_state  # results of the old table
+    assert any("valores calibrados de Str" in i.value for i in at.info)
+    assert any("aplicados à tabela" in m.value for m in at.success)
+    table = next(
+        d for d in at.dataframe if "str" in d.value.columns and len(d.value) == 2
+    )
+    assert table.value["str"].tolist() == calibrated["str"].tolist()
+    _button(at, "▶ Executar roteamento").click().run(timeout=60)
+    assert not at.exception
+    simulated = at.session_state["network_params"]
+    assert simulated["str"].tolist() == calibrated["str"].tolist()
+    entries = [o["entrada"] for o in at.session_state["network_origins"]]
+    assert entries.count("Vazão observada") == 1
+    assert "Parâmetros calibrados" in entries
+
+    # Back to the input values; the calibration result stays available
+    at.button(key="params_revert").click().run(timeout=60)
+    assert not at.exception
+    assert any(b.key == "params_apply" for b in at.button)
+    _button(at, "▶ Executar roteamento").click().run(timeout=60)
+    assert (at.session_state["network_params"]["str"] == 100.0).all()
+
+    at.checkbox(key="show_observed").uncheck().run(timeout=60)
+    assert _charts_with(at, "Observada") == 0
 
 
 def test_unknown_observed_column_is_mapped_by_hand():
@@ -343,3 +375,51 @@ def test_unknown_observed_column_is_mapped_by_hand():
     box.set_value(1).run(timeout=60)
     assert not at.exception
     assert any(b.key == "cal_go" for b in at.button)
+
+
+def test_calibrated_values_go_to_the_delineation_table(monkeypatch):
+    import core.delineation
+    from core.models import run_network_simulation
+
+    monkeypatch.setattr(core.delineation, "delineate", _fake_delineation)
+    prec_csv = (ROOT / "data" / "example_network_prec.csv").read_bytes()
+    etp_csv = (ROOT / "data" / "example_network_etp.csv").read_bytes()
+
+    def series(data: bytes) -> pd.DataFrame:
+        df = load_timeseries(io.BytesIO(data))
+        df.columns = [int(c) for c in df.columns]
+        return df
+
+    truth = _fake_delineation().params.assign(str=300.0)
+    total, _ = run_network_simulation(truth, series(prec_csv), series(etp_csv))
+    obs_csv = total[[1]].rename(columns={1: "barragem_cachoeira"}).to_csv().encode()
+
+    at = AppTest.from_file(PAGE).run(timeout=60)
+    at.checkbox(key="use_network_example").uncheck().run(timeout=60)
+    at.radio(key="network_source").set_value("Delimitar a partir de um ponto")
+    at.run(timeout=60)
+    _button(at, "🗺️ Delimitar sub-bacias").click().run(timeout=60)
+    at.file_uploader(key="prec_upload").set_value(("p.csv", prec_csv, "text/csv"))
+    at.file_uploader(key="etp_upload").set_value(("e.csv", etp_csv, "text/csv"))
+    at.run(timeout=60)
+    at.file_uploader(key="obs_upload").set_value(("q.csv", obs_csv, "text/csv"))
+    at.run(timeout=60)
+    assert not at.exception
+    assert not at.error  # the column is matched by the subcatchment name
+    at.multiselect(key="cal_columns").set_value(["str"])
+    end = next(d for d in at.date_input if d.label == "Fim da calibração")
+    end.set_value(dt.date(2024, 1, 30)).run(timeout=60)
+    at.button(key="cal_go").click().run(timeout=60)
+    assert not at.exception
+    calibrated = at.session_state["network_calibration"]["result"].params
+
+    at.button(key="params_apply").click().run(timeout=60)
+    assert not at.exception
+    assert any("valores calibrados de Str" in i.value for i in at.info)
+    _button(at, "▶ Executar roteamento").click().run(timeout=60)
+    assert not at.exception
+    simulated = at.session_state["network_params"]
+    assert simulated["str"].tolist() == calibrated["str"].tolist()
+    assert simulated["str"].iloc[0] != 100.0
+    # the calibration result is still shown for the table that holds its values
+    assert any("aplicados à tabela" in m.value for m in at.success)
