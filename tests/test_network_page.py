@@ -277,3 +277,69 @@ def test_ana_station_as_outlet_and_upstream(monkeypatch):
     # clicking it again: it is already a point, so both buttons are off
     _click_ana(at, "62664500")
     assert at.button(key="dl_ana_station").disabled
+
+
+def _observed_example_csv(column: str) -> bytes:
+    """Discharge at subcatchment 1 of the example, with another ``str``."""
+    from core.io import load_params, load_timeseries
+    from core.models import run_network_simulation
+
+    def series(name):
+        df = load_timeseries(ROOT / "data" / name)
+        df.columns = [int(c) for c in df.columns]
+        return df
+
+    params = load_params(ROOT / "data" / "example_network_params.csv")
+    params["str"] = 300.0
+    total, _ = run_network_simulation(
+        params, series("example_network_prec.csv"), series("example_network_etp.csv")
+    )
+    return total[[1]].rename(columns={1: column}).to_csv().encode()
+
+
+def test_calibration_feeds_the_simulation():
+    at = AppTest.from_file(PAGE).run(timeout=60)
+    at.file_uploader(key="obs_upload").set_value(
+        ("vazao.csv", _observed_example_csv("1"), "text/csv")
+    ).run(timeout=60)
+    assert not at.exception
+    assert not at.error  # 30 days observed, calibration default to 70 % of them
+    at.multiselect(key="cal_columns").set_value(["str"])
+    end = next(d for d in at.date_input if d.label == "Fim da calibração")
+    end.set_value(dt.date(2024, 1, 30)).run(timeout=60)
+    at.button(key="cal_go").click().run(timeout=60)
+    assert not at.exception
+    assert not at.error
+    stored = at.session_state["network_calibration"]
+    metrics = stored["result"].metrics
+    assert list(metrics.index) == [1]
+    assert metrics.loc[1, "KGE calibração"] > 0.95
+    calibrated = stored["result"].params
+    assert calibrated["str"].nunique() == 1  # one group: both subcatchments share it
+
+    _button(at, "▶ Executar roteamento").click().run(timeout=60)
+    assert not at.exception
+    pd.testing.assert_frame_equal(at.session_state["network_params"], calibrated)
+    origins = at.session_state["network_origins"]
+    assert [o["entrada"] for o in origins][-2:] == [
+        "Vazão observada",
+        "Parâmetros calibrados",
+    ]
+
+    at.checkbox(key="use_calibrated").uncheck().run(timeout=60)
+    _button(at, "▶ Executar roteamento").click().run(timeout=60)
+    assert (at.session_state["network_params"]["str"] == 100.0).all()
+
+
+def test_unknown_observed_column_is_mapped_by_hand():
+    at = AppTest.from_file(PAGE).run(timeout=60)
+    at.file_uploader(key="obs_upload").set_value(
+        ("vazao.csv", _observed_example_csv("posto_x"), "text/csv")
+    ).run(timeout=60)
+    assert not at.exception
+    assert any("posto_x" in s.label for s in at.selectbox)
+    assert any("Nenhuma coluna" in w.value for w in at.warning)
+    box = next(s for s in at.selectbox if "posto_x" in s.label)
+    box.set_value(1).run(timeout=60)
+    assert not at.exception
+    assert any(b.key == "cal_go" for b in at.button)
