@@ -103,13 +103,28 @@ def plot_network_hydrograph(
     df: pd.DataFrame,
     title: str = "Hidrogramas da Rede",
     colors: dict | None = None,
+    observed: pd.DataFrame | None = None,
 ) -> go.Figure:
+    """
+    One line per column of ``df``. ``observed`` columns are drawn dotted: in the
+    color of the ``df`` column with the same name, or dark grey on their own.
+    """
     fig = go.Figure()
+    line_colors = {}
     for i, col in enumerate(df.columns):
         color = (colors or {}).get(col) or NETWORK_DEFAULT_COLORS[i % len(NETWORK_DEFAULT_COLORS)]
+        line_colors[col] = color
         fig.add_trace(go.Scatter(
             x=df.index, y=df[col], name=f"Subcatchment {col}",
             line=dict(color=color, width=2),
+        ))
+    for col in [] if observed is None else observed.columns:
+        own = col in line_colors
+        fig.add_trace(go.Scatter(
+            x=observed.index, y=observed[col],
+            name=f"Observada {col}" if own else str(col),
+            line=dict(color=line_colors.get(col, "#404040"), width=1.5, dash="dot"),
+            connectgaps=False,
         ))
     fig.update_layout(
         title=title,
