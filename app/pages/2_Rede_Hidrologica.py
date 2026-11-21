@@ -1,4 +1,5 @@
 import datetime as dt
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -8,10 +9,21 @@ from app.components.charts import (
     BASEMAPS,
     NETWORK_DEFAULT_COLORS,
     plot_delineation_preview,
+    plot_hydrograph,
     plot_network_hydrograph,
     plot_network_map,
 )
 from core.ana import fetch_inventory, stations_in_bbox
+from core.calibration import (
+    CALIBRATABLE,
+    MODES,
+    calibrate_network,
+    evaluations_per_gauge,
+    group_sizes,
+    match_observed_columns,
+    observed_by_basin,
+    parameter_bounds,
+)
 from core.delineation import (
     DEFAULT_RESOLUTION_DEG,
     TOPOLOGY_COLUMNS,
@@ -729,6 +741,362 @@ def _render_map_tab(gdf, total, natural, params, name_map, outlet_ids, rivers=No
         st.plotly_chart(fig, width="stretch")
 
 
+_CAL_MODES = {"Rápida": "fast", "Completa": "full"}
+_CAL_SEED = 1
+# Differential evolution, parameter copies and progress updates add about 25 %
+# to the bare simulations (measured on a 4-subcatchment, 5-year network)
+_CAL_OVERHEAD = 1.3
+_IGNORE = "(ignorar)"
+
+
+def _inputs_signature(params_df, prec_df, etp_df, method) -> tuple:
+    """Changes whenever an input of the calibration changes."""
+
+    def digest(df: pd.DataFrame) -> int:
+        return int(pd.util.hash_pandas_object(df, index=True).sum())
+
+    return (
+        tuple(map(str, params_df.columns)),
+        digest(params_df.astype(str)),
+        digest(prec_df),
+        digest(etp_df),
+        method,
+    )
+
+
+def _simulation_seconds(signature, params_df, prec_df, etp_df, method) -> float:
+    """Time of one simulation of the whole network, measured once per input set."""
+    stored = st.session_state.get("sim_seconds")
+    if stored is not None and stored[0] == signature:
+        return stored[1]
+    start = time.perf_counter()
+    run_network_simulation(params_df, prec_df, etp_df, method=method)
+    seconds = time.perf_counter() - start
+    st.session_state["sim_seconds"] = (signature, seconds)
+    return seconds
+
+
+def _duration(seconds: float) -> str:
+    if seconds < 90:
+        return f"{seconds:.0f} s"
+    return f"{seconds / 60:.0f} min"
+
+
+def _observed_input(params_df, prec_df, names: dict, obs_file):
+    """Observed discharge per gauged subcatchment on the forcing index, or None."""
+    try:
+        raw = load_timeseries(obs_file)
+    except Exception as e:  # malformed files raise many error types
+        st.error(f"Erro ao ler a vazão observada: {e}")
+        return None
+    matched, unmatched = match_observed_columns(raw, params_df)
+    if unmatched:
+        st.warning(
+            "Colunas sem sub-bacia correspondente (pelo `id` ou pelo `name`): "
+            "escolha a sub-bacia de cada uma ou ignore-a."
+        )
+        free = [i for i in params_df["id"] if i not in matched.values()]
+        for col in unmatched:
+            choice = st.selectbox(
+                f"Coluna **{col}**",
+                [_IGNORE, *free],
+                format_func=lambda i: i if i == _IGNORE else f"{i} — {names.get(i, i)}",
+                key=f"obs_map_{obs_file.file_id}_{col}",
+            )
+            if choice != _IGNORE:
+                if choice in matched.values():
+                    st.error(f"A sub-bacia {choice} foi escolhida para duas colunas.")
+                    return None
+                matched[col] = choice
+    if not matched:
+        st.warning("Nenhuma coluna da vazão observada está ligada a uma sub-bacia.")
+        return None
+    observed = observed_by_basin(raw, matched, prec_df.index)
+    empty = [c for c in observed.columns if observed[c].isna().all()]
+    if empty:
+        st.warning(
+            "Sem dado observado no período da precipitação e da ETP: "
+            f"{', '.join(str(names.get(c, c)) for c in empty)}."
+        )
+        observed = observed.drop(columns=empty)
+    if observed.empty:
+        st.error("A vazão observada não tem nenhum dia no período da simulação.")
+        return None
+    return observed
+
+
+def _calibration_origin(result, columns, period, mode, method_label) -> dict:
+    s = MODES[mode]
+    bounds = parameter_bounds()
+    return {
+        "entrada": "Parâmetros calibrados",
+        "origem": "Calibração no app (grupos por posto, como no mogest-network)",
+        "otimizador": "scipy.optimize.differential_evolution",
+        "objetivo": "KGE no período de calibração",
+        "modo": mode,
+        "popsize": s["popsize"],
+        "maxiter": s["maxiter"],
+        "semente": _CAL_SEED,
+        "propagacao": method_label,
+        "parametros": {CALIBRATABLE[c]: list(bounds[c]) for c in columns},
+        "periodo_calibracao": f"{period[0]:%Y-%m-%d} a {period[1]:%Y-%m-%d}",
+        "postos": result.metrics.round(4).reset_index().to_dict("records"),
+        "herdados": {str(k): v for k, v in result.inherited.items()},
+    }
+
+
+def _render_calibration_result(stored: dict, names: dict):
+    result = stored["result"]
+    label = lambda i: str(names.get(i, i))  # noqa: E731
+    st.markdown("**Resultado da calibração**")
+    metrics = result.metrics.copy()
+    metrics.insert(0, "Posto", [label(g) for g in metrics.index])
+    st.dataframe(metrics.round(3), width="stretch")
+    if result.inherited:
+        st.caption(
+            "Abaixo de todos os postos, com os parâmetros do posto de montante de "
+            "maior área: "
+            + ", ".join(f"{label(s)} ← {label(g)}" for s, g in result.inherited.items())
+        )
+    kept = [
+        s for s, g in result.groups.items() if g is None and s not in result.inherited
+    ]
+    if kept:
+        st.caption(
+            "Sem posto a montante nem a jusante, mantiveram os parâmetros: "
+            + ", ".join(label(s) for s in kept)
+        )
+    name = ["name"] if "name" in result.params.columns else []
+    shown = ["id", *name, *stored["columns"]]
+    c_table, c_plot = st.columns([2, 3])
+    with c_table:
+        st.dataframe(result.params[shown], hide_index=True, width="stretch")
+        st.download_button(
+            "📥 Parâmetros calibrados (CSV)",
+            data=result.params.to_csv(index=False).encode(),
+            file_name="parametros_calibrados.csv",
+            mime="text/csv",
+            help="Tabela completa, no formato do template de parâmetros: pode ser "
+            "enviada de volta.",
+        )
+    with c_plot:
+        gauge = st.selectbox(
+            "Posto", list(result.metrics.index), format_func=label, key="cal_gauge"
+        )
+        fig = plot_hydrograph(
+            result.simulated[gauge].tolist(),
+            index=result.simulated.index,
+            obs=result.observed[gauge].tolist(),
+            title=f"Observada × simulada — {label(gauge)}",
+        )
+        first, last = stored["period"]
+        fig.add_vrect(
+            x0=pd.Timestamp(first),
+            x1=pd.Timestamp(last),
+            fillcolor="#808080",
+            opacity=0.12,
+            line_width=0,
+            annotation_text="calibração",
+            annotation_position="top left",
+        )
+        st.plotly_chart(fig, width="stretch")
+    if "use_calibrated" not in st.session_state:
+        st.session_state["use_calibrated"] = True
+    return st.checkbox(
+        "Simular com os parâmetros calibrados",
+        key="use_calibrated",
+        help="Desmarque para voltar aos parâmetros de entrada.",
+    )
+
+
+def _render_calibration(params_df, prec_df, etp_df, method, method_label, names):
+    """
+    Calibration of the SMAP parameters against observed discharge.
+
+    Returns (params, origins): the calibrated parameters and the origins of the
+    observed series and of the calibration while the user keeps them on; the
+    input parameters and no origin otherwise.
+    """
+    signature = _inputs_signature(params_df, prec_df, etp_df, method)
+    stored = st.session_state.get("network_calibration")
+    if stored is not None and stored["signature"] != signature:
+        stored = None
+    st.subheader("🎯 Calibração")
+    with st.expander(
+        "Calibrar os parâmetros SMAP com a vazão observada", expanded=stored is not None
+    ):
+        st.markdown(
+            "Cada **posto** (sub-bacia com vazão observada) define um grupo: as "
+            "sub-bacias cujo primeiro posto a jusante é ele, que passam a "
+            "compartilhar os parâmetros. Os grupos são calibrados de montante para "
+            "jusante (evolução diferencial, objetivo KGE), com a vazão dos grupos de "
+            "montante já calibrados fixa. Sub-bacias abaixo de todos os postos herdam "
+            "os parâmetros do posto de montante de maior área de drenagem. É a "
+            "estratégia do `mogest-network`; `k`, `x` e os parâmetros do trecho não "
+            "são calibrados."
+        )
+        c_tpl, c_up = st.columns([1, 3])
+        c_tpl.download_button(
+            "📥 Template — vazão observada",
+            data=series_template(params_df),
+            file_name="template_rede_vazao_observada.csv",
+            mime="text/csv",
+            help="`date` e uma coluna por sub-bacia com posto (apague as outras). "
+            "O nome da coluna pode ser o `id` ou o `name` da sub-bacia; vazio ou "
+            "negativo é falha.",
+        )
+        obs_file = c_up.file_uploader(
+            "Vazão observada (m³/s)", type=["csv", "xlsx"], key="obs_upload"
+        )
+        observed = None
+        if obs_file is not None:
+            observed = _observed_input(params_df, prec_df, names, obs_file)
+        elif stored is None:
+            st.info("Envie a vazão observada para calibrar.")
+
+        if observed is not None:
+            gauges = list(observed.columns)
+            sizes = group_sizes(params_df, gauges)
+            valid = observed.notna()
+            first_day = [observed[g].first_valid_index() for g in gauges]
+            last_day = [observed[g].last_valid_index() for g in gauges]
+            st.dataframe(
+                pd.DataFrame(
+                    {
+                        "Posto": [str(names.get(g, g)) for g in gauges],
+                        "Sub-bacias no grupo": [sizes[g] for g in gauges],
+                        "Dias observados": [int(valid[g].sum()) for g in gauges],
+                        "Primeiro dia": first_day,
+                        "Último dia": last_day,
+                    }
+                ),
+                hide_index=True,
+                width="stretch",
+                column_config={
+                    "Primeiro dia": st.column_config.DateColumn(format="YYYY-MM-DD"),
+                    "Último dia": st.column_config.DateColumn(format="YYYY-MM-DD"),
+                },
+            )
+            bounds = parameter_bounds()
+            columns = st.multiselect(
+                "Parâmetros a calibrar",
+                list(CALIBRATABLE),
+                default=list(CALIBRATABLE),
+                format_func=lambda c: (
+                    f"{CALIBRATABLE[c]} ({bounds[c][0]:g}–{bounds[c][1]:g})"
+                ),
+                key="cal_columns",
+            )
+            days = observed.index[valid.any(axis=1)]
+            first, last = days[0].date(), days[-1].date()
+            warm = pd.Timestamp(prec_df.index[0]).date() + dt.timedelta(days=365)
+            start = warm if first < warm < last else first
+            end = start + (last - start) * 0.7
+            c_start, c_end, c_mode = st.columns(3)
+            key = obs_file.file_id
+            cal_start = c_start.date_input(
+                "Início da calibração", start, first, last, key=f"cal_start_{key}"
+            )
+            cal_end = c_end.date_input(
+                "Fim da calibração", end, first, last, key=f"cal_end_{key}"
+            )
+            mode_label = c_mode.radio(
+                "Modo",
+                list(_CAL_MODES),
+                horizontal=True,
+                key="cal_mode",
+                help="Rápida: população 8 × nº de parâmetros, até 20 gerações. "
+                "Completa: população 15 × nº de parâmetros, até 60 gerações.",
+            )
+            mode = _CAL_MODES[mode_label]
+            st.caption(
+                "A simulação começa no primeiro dia da precipitação e da ETP: o "
+                "trecho antes da calibração serve de aquecimento. Os dias observados "
+                "fora do período de calibração formam a validação."
+            )
+            if columns:
+                evals = evaluations_per_gauge(len(columns), mode)
+                seconds = _simulation_seconds(
+                    signature, params_df, prec_df, etp_df, method
+                )
+                share = sum(sizes.values()) / len(params_df)
+                estimate = _CAL_OVERHEAD * seconds * evals * share
+                st.caption(
+                    f"Até {evals:,} simulações por posto, {len(gauges)} posto(s): "
+                    f"cerca de {_duration(estimate)} se todas as gerações rodarem; "
+                    "costuma terminar antes, quando a população converge (uma "
+                    f"simulação da rede inteira leva {seconds:.2f} s aqui)."
+                )
+            if cal_end <= cal_start:
+                st.error("O fim da calibração deve vir depois do início.")
+            if st.button(
+                "🎯 Calibrar",
+                type="primary",
+                disabled=not columns or cal_end <= cal_start,
+                key="cal_go",
+            ):
+                bar = st.progress(0.0, text="Calibrando…")
+
+                def progress(i, n, gauge, generation, maxiter, best):
+                    bar.progress(
+                        min((i + generation / maxiter) / n, 1.0),
+                        text=f"Posto {i + 1}/{n} ({names.get(gauge, gauge)}): "
+                        f"geração {generation}/{maxiter}, melhor KGE {best:.3f}",
+                    )
+
+                began = time.perf_counter()
+                try:
+                    result = calibrate_network(
+                        params_df,
+                        prec_df,
+                        etp_df,
+                        observed,
+                        columns,
+                        (cal_start, cal_end),
+                        method=method,
+                        mode=mode,
+                        seed=_CAL_SEED,
+                        on_progress=progress,
+                    )
+                except ValueError as e:
+                    bar.empty()
+                    st.error(str(e))
+                else:
+                    bar.progress(
+                        1.0,
+                        text="Calibração concluída em "
+                        f"{_duration(time.perf_counter() - began)}.",
+                    )
+                    period = (cal_start, cal_end)
+                    stored = {
+                        "signature": signature,
+                        "result": result,
+                        "columns": columns,
+                        "period": period,
+                        "origins": [
+                            file_origin(
+                                "Vazão observada",
+                                obs_file.name,
+                                obs_file.getvalue(),
+                                observed.dropna(how="all"),
+                            ),
+                            _calibration_origin(
+                                result, columns, period, mode, method_label
+                            ),
+                        ],
+                    }
+                    st.session_state["network_calibration"] = stored
+                    st.session_state["use_calibrated"] = True
+                    st.session_state.pop("network_result", None)
+
+        if stored is None:
+            return params_df, []
+        if _render_calibration_result(stored, names):
+            st.caption("A simulação abaixo usa os parâmetros calibrados.")
+            return stored["result"].params, stored["origins"]
+        return params_df, []
+
+
 # --- Checkbox first; uploaders only shown when example is OFF ---
 if "use_network_example" not in st.session_state:
     st.session_state["use_network_example"] = True
@@ -966,6 +1334,12 @@ if set(st.session_state.get("basin_names", {}).keys()) != set(basin_ids):
         bid: str(_names_source.get(bid, bid)) for bid in basin_ids
     }
 
+params_df, _calibration_origins = _render_calibration(
+    params_df, prec_df, etp_df, method, method_label, st.session_state["basin_names"]
+)
+origins = [*origins, *_calibration_origins]
+
+st.subheader("Simulação")
 if st.button("▶ Executar roteamento", type="primary"):
     with st.spinner("Simulando rede hidrológica..."):
         try:
