@@ -10,7 +10,7 @@ Interface web em [Streamlit](https://streamlit.io) para os modelos hidrológicos
 | Página | O que faz |
 |---|---|
 | Simulação SMAP | SMAP diário (`SmapD`) ou mensal (`SmapM`) em uma bacia: parâmetros editáveis ou importados, métricas (NSE, KGE), volume acumulado, médias mensais, estatísticas anuais e calibração automática (evolução diferencial padrão ou rápida) quando há série observada |
-| Rede Hidrológica | SMAP em cada sub-bacia com propagação por Muskingum linear ou Muskingum-Cunge (`mogestpy.quantity.hydrological.routing.run_network`); hidrogramas por sub-bacia e nos exutórios, vazão natural × total, mapa das sub-bacias (pico, média, volume, fração de montante ou vazão num instante; clique abre o hidrograma), estatísticas e exportação. As sub-bacias vêm de arquivos ou são delimitadas a partir de um ponto (ver abaixo) |
+| Rede Hidrológica | SMAP em cada sub-bacia com propagação por Muskingum linear ou Muskingum-Cunge (`mogestpy.quantity.hydrological.routing.run_network`); hidrogramas por sub-bacia e nos exutórios, vazão natural × total, mapa das sub-bacias (pico, média, volume, fração de montante ou vazão num instante; clique abre o hidrograma), estatísticas e exportação. As sub-bacias vêm de arquivos ou são delimitadas a partir de um ponto (ver abaixo), e os parâmetros SMAP podem ser calibrados com a vazão observada nos postos (ver abaixo) |
 
 ## Requisitos
 
@@ -52,8 +52,35 @@ exemplos estão em `data/`.
 | Simulação SMAP | observada (opcional) | `date`, `obs` (m³/s) |
 | Rede Hidrológica | parâmetros | `id`, `area` (km²), `str`, `crec`, `capc`, `kkt`, `k2t`, `ai`, `tuin` (% de 0 a 100), `ebin`, `k`, `x`, `downstream_id` (vazio ou `-999` no exutório) |
 | Rede Hidrológica | parâmetros, só para Muskingum-Cunge | `length` (m), `q_ref` (m³/s), `manning`, `width` (m), `slope` (m/m) do trecho que atravessa a sub-bacia que recebe a vazão de montante; `length = 0` passa a vazão sem propagar |
+| Rede Hidrológica | vazão observada (opcional, para calibrar) | `date` e uma coluna por sub-bacia com posto (m³/s), com o `id` ou o `name` como nome; vazio ou negativo é falha |
 | Rede Hidrológica | precipitação e ETP | `date` e uma coluna por sub-bacia, com o `id` como nome (no modo delimitação, podem vir da NASA POWER) |
 | Rede Hidrológica | polígonos (opcional) | GeoJSON, shapefile em `.zip` ou GeoPackage, em qualquer sistema de coordenadas (reprojetado para WGS84), com atributo `id` e, opcionalmente, `name` (no shapefile, `downstream_id` truncado para `downstream` é reconhecido). Se os atributos trouxerem todas as colunas de parâmetros, a tabela de parâmetros é dispensada; `area` em km² é calculada pela geometria quando falta |
+
+## Calibração da rede
+
+Na página Rede, a seção **Calibração** ajusta `str`, `crec`, `capc`, `kkt`, `k2t` e `ai`
+(os que forem escolhidos, nos limites do `SmapD.bounds()`) à vazão observada, com a
+estratégia de grupos do `mogest-network`:
+
+- cada posto (sub-bacia com vazão observada) define um grupo: as sub-bacias cujo primeiro
+  posto a jusante, contando a própria, é ele; as sub-bacias do grupo compartilham os
+  parâmetros;
+- os grupos são calibrados de montante para jusante: cada um simula só as próprias
+  sub-bacias, e a vazão dos grupos de montante, já calibrados, entra fixa
+  (`external_inflows` do `run_network`);
+- sub-bacias abaixo de todos os postos herdam os parâmetros do posto de montante de maior
+  área de drenagem;
+- otimizador: `scipy.optimize.differential_evolution` (semente fixa), objetivo KGE no
+  período de calibração; o modo rápido usa população 8 × nº de parâmetros e até 20
+  gerações, o completo 15 × e até 60.
+
+A simulação começa no primeiro dia da precipitação e da ETP, e o trecho antes do período
+de calibração serve de aquecimento. Os dias observados fora do período de calibração
+formam a validação. O resultado traz KGE e NSE de calibração e validação por posto, o
+hidrograma observado × simulado e a tabela de parâmetros calibrados (CSV no formato do
+template), usada na simulação enquanto a opção estiver marcada; a vazão observada e a
+calibração entram na **Origem dos dados**. `k`, `x` e os parâmetros do trecho não são
+calibrados.
 
 ## Delimitação a partir de um ponto
 
