@@ -67,26 +67,33 @@ def run_network_simulation(
     Returns (total, natural): discharge (m³/s) per subcatchment, with and
     without upstream contribution.
     """
-    params_df = params_df.copy()
-    params_df["downstream_id"] = pd.to_numeric(
-        params_df["downstream_id"], errors="coerce"
-    ).replace(-999, float("nan"))
-
-    if method == "muskingum_cunge":
-        missing = [c for c in CUNGE_COLUMNS if c not in params_df.columns]
-        if missing:
-            raise ValueError(f"Muskingum-Cunge requires parameter columns: {missing}.")
-        router = MuskingumCunge.router()
-    elif method == "muskingum":
-        router = None
-    else:
-        raise ValueError(f"Unknown routing method: {method}.")
-
+    params_df = prepare_network_params(params_df)
     return run_network(
         params_df,
         prec_df,
         etp_df,
         verbose=verbose,
-        router=router,
+        router=network_router(params_df, method),
         return_natural_flow=True,
     )
+
+
+def prepare_network_params(params_df: pd.DataFrame) -> pd.DataFrame:
+    """Copy with ``downstream_id`` numeric and NaN (not -999) at the outlets."""
+    params_df = params_df.copy()
+    params_df["downstream_id"] = pd.to_numeric(
+        params_df["downstream_id"], errors="coerce"
+    ).replace(-999, float("nan"))
+    return params_df
+
+
+def network_router(params_df: pd.DataFrame, method: str):
+    """Router for ``run_network``: None (linear Muskingum) or Muskingum-Cunge."""
+    if method == "muskingum_cunge":
+        missing = [c for c in CUNGE_COLUMNS if c not in params_df.columns]
+        if missing:
+            raise ValueError(f"Muskingum-Cunge requires parameter columns: {missing}.")
+        return MuskingumCunge.router()
+    if method == "muskingum":
+        return None
+    raise ValueError(f"Unknown routing method: {method}.")
